@@ -15,11 +15,12 @@ services:
       - key: APP_BASE_URL
         value: https://spravy.powergy.sk
 
- - type: cron
+  - type: cron
     name: powergy-scraper-daily
     env: docker
-    schedule: "0 5 * * *"   # denne o 05:00 UTC (zmeň podľa potreby)
-    dockerCommand: 'python -c "from app.scraper import run_daily; run_daily()"'
+    schedule: "0 5 * * *"
+    dockerCommand: |
+      python -c "from app.scraper import run_daily; run_daily()"
     envVars:
       - key: DATABASE_URL
         sync: false
