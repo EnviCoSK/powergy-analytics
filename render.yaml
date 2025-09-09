@@ -3,7 +3,7 @@ services:
     name: powergy-analytics
     env: docker
     plan: starter
-    healthCheckPath: /api/today
+    healthCheckPath: /
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
