@@ -235,14 +235,16 @@ def api_agsi_probe(from_: str = Query("2025-01-01", alias="from")):
     except Exception:
         j = {}
 
-    return {
-        "ok": r.ok,
-        "status": r.status_code,
-        "request_url": r.url,
-        "json_keys": list(j.keys()) if isinstance(j, dict) else None,
-        "count": (len(j.get("data", [])) if isinstance(j, dict) and isinstance(j.get("data", []), list) else None),
-        "sample": (j.get("data") or [])[:3] if isinstance(j, dict) else None,
-    }
+   return {
+  "ok": r.ok,
+  "status": r.status_code,
+  "request_url": r.url,
+  "json_keys": list(j.keys()) if isinstance(j, dict) else None,
+  "total": (j.get("total") if isinstance(j, dict) else None),
+  "last_page": (j.get("last_page") if isinstance(j, dict) else None),
+  "count": (len(j.get("data", [])) if isinstance(j, dict) and isinstance(j.get("data", []), list) else None),
+  "sample": (j.get("data") or [])[:3] if isinstance(j, dict) else None,
+}
 
 # (voliteľné) spätný prepočet dennej zmeny po importe
 @app.post("/api/recompute-deltas", response_class=JSONResponse)
