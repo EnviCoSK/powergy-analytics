@@ -7,3 +7,4 @@ openai>=1.37.0
 playwright
 pydantic
 jinja2
+requests
