@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse
-from datetime import timedelta, datetime
+from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # ← pridaj sem
+from sqlalchemy import desc
+from datetime import timedelta
 from jinja2 import Template
-import csv, io
+import io, csv  # ← kľudne sem (modulovo)
 
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
@@ -219,43 +220,64 @@ def api_history(days: int = 30):
 import io, csv
 
 def _history_rows(days: int):
-    "Vracia zoznam (date, percent, delta, comment) za posledné dni (vzostupne)."
+    """Vracia zoznam (date, percent, delta, comment) za posledné dni (vzostupne)."""
     sess = SessionLocal()
     try:
-        rows = (sess.query(GasStorageDaily)
-                    .order_by(GasStorageDaily.date.desc())
-                    .limit(days).all())
+        rows = (
+            sess.query(GasStorageDaily)
+            .order_by(GasStorageDaily.date.desc())
+            .limit(days)
+            .all()
+        )
         rows = list(reversed(rows))
-        return [(str(r.date), float(r.percent), (None if r.delta is None else float(r.delta)), r.comment or "") for r in rows]
+        out = []
+        for r in rows:
+            out.append([
+                str(r.date),
+                float(r.percent),
+                (None if r.delta is None else float(r.delta)),
+                r.comment or ""
+            ])
+        return out
     finally:
         sess.close()
 
+
 @app.get("/api/export.csv")
 def api_export_csv(days: int = 30):
-    rows = _history_rows(days)
     buff = io.StringIO()
-    w = csv.writer(buff)
-    w.writerow(["date","percent","delta","comment"])
-    w.writerows(rows)
+    writer = csv.writer(buff)
+    writer.writerow(["date", "percent", "delta", "comment"])
+    for row in _history_rows(days):
+        writer.writerow(row)
     buff.seek(0)
-    return StreamingResponse(buff, media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.csv"'})
+    return StreamingResponse(
+        buff,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.csv"'}
+    )
+
 
 @app.get("/api/export.xlsx")
 def api_export_xlsx(days: int = 30):
+    # import lokálne (ak nechceš globálny import openpyxl)
     from openpyxl import Workbook
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Data"
-    ws.append(["date","percent","delta","comment"])
+    ws.append(["date", "percent", "delta", "comment"])
     for row in _history_rows(days):
         ws.append(row)
+
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
-    return StreamingResponse(out, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.xlsx"'})
-
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.xlsx"'}
+    )
     # minulý rok – posun o 365 dní (proxy) + ošetrenie 29.2.
     prev_rows = []
     for r in rows:
