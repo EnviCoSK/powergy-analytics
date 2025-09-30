@@ -73,7 +73,15 @@ INDEX_HTML = Template("""<!doctype html>
   </div>
 
 <script>
-async function fetchJson(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function fetchJson(url){
+  const r = await fetch(url);
+  let body = null;
+  try { body = await r.json(); } catch(_){}
+  if(!r.ok){
+    throw new Error(`${r.status} ${r.statusText} – ${url}\n${JSON.stringify(body)}`);
+  }
+  return body;
+}
 
 async function render(days){
   // karty
@@ -84,6 +92,17 @@ async function render(days){
   }
   const today = await todayResp.json();
   const hist = await fetchJson(`/api/history?days=${days}`);
+  const today = await todayResp.json();
+const hist = await fetchJson(`/api/history?days=${days}`);
+
+// kontrola, či máme dáta
+if(!hist || !Array.isArray(hist.records) || hist.records.length === 0){
+  const ctx = document.getElementById("chart");
+  const g = ctx.getContext("2d");
+  g.clearRect(0,0,ctx.width,ctx.height);
+  document.getElementById("table").innerHTML = '<div class="muted">Žiadne záznamy pre zvolený rozsah.</div>';
+  return;
+}
 
   const cards = document.getElementById("cards");
   const delta = today.delta===null ? "—" : (today.delta>0?("+"+today.delta.toFixed(2)+" %"):(today.delta.toFixed(2)+" %"));
