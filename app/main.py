@@ -217,6 +217,33 @@ def api_backfill_agsi(from_: str = Query("2025-01-01", alias="from")):
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+# Diagnostika AGSI API – na kontrolu či vracia dáta
+@app.get("/api/agsi-probe", response_class=JSONResponse)
+def api_agsi_probe(from_: str = Query("2025-01-01", alias="from")):
+    import os, requests, datetime
+    key = os.getenv("AGSI_API_KEY", "")
+    if not key:
+        return JSONResponse({"ok": False, "error": "Missing AGSI_API_KEY"}, status_code=400)
+
+    url = "https://agsi.gie.eu/api"
+    params = {"country": "EU", "from": from_, "to": datetime.date.today().isoformat(), "type": "aggregated"}
+    r = requests.get(url, params=params, headers={"x-key": key}, timeout=60)
+
+    ct = r.headers.get("content-type", "")
+    try:
+        j = r.json() if "application/json" in ct else {}
+    except Exception:
+        j = {}
+
+    return {
+        "ok": r.ok,
+        "status": r.status_code,
+        "request_url": r.url,
+        "json_keys": list(j.keys()) if isinstance(j, dict) else None,
+        "count": (len(j.get("data", [])) if isinstance(j, dict) and isinstance(j.get("data", []), list) else None),
+        "sample": (j.get("data") or [])[:3] if isinstance(j, dict) else None,
+    }
+
 # (voliteľné) spätný prepočet dennej zmeny po importe
 @app.post("/api/recompute-deltas", response_class=JSONResponse)
 def api_recompute_deltas():
