@@ -153,7 +153,7 @@ def backfill_agsi(from_date: str = "2025-01-01"):
     try:
         for row in rows:
             # dátum môže byť 'gasDayStart' alebo 'gas_day'
-           d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
+            d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
             # percentá bývajú 'full' | 'fullness' | 'percentage'
             p = row.get("full") or row.get("fullness") or row.get("percentage")
             if not d or p is None:
