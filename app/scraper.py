@@ -60,12 +60,61 @@ def run_daily():
     sess.close()
     
 import os
-import datetime
+import datetime as dt
 import requests
 from .database import SessionLocal
 from .models import GasStorageDaily
 
 AGSI_API_KEY = os.getenv("AGSI_API_KEY", "")
+
+def _agsi_fetch_all(from_date: str) -> list[dict]:
+    """
+    Stiahne všetky strany (page 1..last_page) z AGSI pre EU aggregated.
+    Navyše skúsi aj alternatívne hodnoty 'type' ak by jedna vracala prázdno.
+    """
+    headers = {"x-key": AGSI_API_KEY}
+    url = "https://agsi.gie.eu/api"
+    base = {
+        "country": "EU",
+        "from": from_date,
+        "to": dt.date.today().isoformat(),
+        "size": 5000,          # veľká strana, nech netreba desiatky requestov
+        "type": "aggregated",  # primárna voľba
+    }
+
+    def fetch_pages(params: dict) -> list[dict]:
+        out: list[dict] = []
+        page = 1
+        last_page = 1
+        while page <= last_page:
+            p = dict(params)
+            p["page"] = page
+            r = requests.get(url, params=p, headers=headers, timeout=60)
+            r.raise_for_status()
+            j = r.json()
+            data = j.get("data") if isinstance(j, dict) else None
+            if isinstance(j, dict):
+                last_page = int(j.get("last_page", 1) or 1)
+            if isinstance(data, list) and data:
+                out.extend(data)
+            page += 1
+        return out
+
+    # 1) type=aggregated
+    rows = fetch_pages(base)
+    if rows:
+        return rows
+
+    # 2) type=AGGREGATED
+    base2 = dict(base); base2["type"] = "AGGREGATED"
+    rows = fetch_pages(base2)
+    if rows:
+        return rows
+
+    # 3) bez 'type'
+    base3 = dict(base); base3.pop("type", None)
+    rows = fetch_pages(base3)
+    return rows
 
 def backfill_agsi(from_date: str = "2025-01-01"):
     """
@@ -75,30 +124,19 @@ def backfill_agsi(from_date: str = "2025-01-01"):
     if not AGSI_API_KEY:
         raise RuntimeError("Missing AGSI_API_KEY")
 
-    url = "https://agsi.gie.eu/api"
-    params = {
-        "type": "aggregated",
-        "country": "EU",
-        "from": from_date,
-        "to": datetime.date.today().isoformat(),
-    }
-    headers = {"x-key": AGSI_API_KEY}
-
-    r = requests.get(url, params=params, headers=headers, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, dict) or "data" not in data:
-        raise RuntimeError(f"AGSI unexpected response: {data}")
+    rows = _agsi_fetch_all(from_date)
 
     sess = SessionLocal()
     inserted, updated = 0, 0
     try:
-        for row in data["data"]:
-            d = (row.get("gasDayStart") or row.get("date"))[:10]
+        for row in rows:
+            # dátum môže byť 'gasDayStart' alebo 'gas_day'
+            d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
+            # percentá bývajú 'full' | 'fullness' | 'percentage'
             p = row.get("full") or row.get("fullness") or row.get("percentage")
             if not d or p is None:
                 continue
-            d_obj = datetime.date.fromisoformat(d)
+            d_obj = dt.date.fromisoformat(d)
             p_val = float(p)
 
             rec = sess.query(GasStorageDaily).filter(GasStorageDaily.date == d_obj).first()
@@ -111,7 +149,7 @@ def backfill_agsi(from_date: str = "2025-01-01"):
                 inserted += 1
 
         sess.commit()
-        return {"inserted": inserted, "updated": updated}
+        return {"inserted": inserted, "updated": updated, "source_count": len(rows)}
     except Exception:
         sess.rollback()
         raise
