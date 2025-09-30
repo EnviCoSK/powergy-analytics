@@ -8,3 +8,4 @@ playwright
 pydantic
 jinja2
 requests
+openpyxl
