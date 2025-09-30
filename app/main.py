@@ -216,7 +216,7 @@ def api_history(days: int = 30):
     rows = list(reversed(rows))
     records = [{"date": str(r.date), "percent": r.percent, "delta": r.delta} for r in rows]
 
-  from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse
 import io, csv
 
 def _history_rows(days: int):
