@@ -293,18 +293,13 @@ def api_today():
 
 @app.get("/api/history", response_class=JSONResponse)
 def api_history(days: int = 30):
-    sess = SessionLocal()
-    rows = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(days).all()
-    rows = list(reversed(rows))
-    records = [{"date": str(r.date), "percent": r.percent, "delta": r.delta} for r in rows]
-
-from fastapi.responses import StreamingResponse
-import io, csv
-
-def _history_rows(days: int):
-    """Vracia zoznam (date, percent, delta, comment) za posledné dni (vzostupne)."""
+    """
+    Vráti posledných N dní v poradí od najstaršieho po najnovší
+    + matching hodnoty z predchádzajúceho roka.
+    """
     sess = SessionLocal()
     try:
+        # posledných N dní (vezmeme zostupne a otočíme na vzostupne)
         rows = (
             sess.query(GasStorageDaily)
             .order_by(GasStorageDaily.date.desc())
@@ -312,18 +307,44 @@ def _history_rows(days: int):
             .all()
         )
         rows = list(reversed(rows))
-        out = []
+
+        records = [
+            {
+                "date": str(r.date),
+                "percent": float(r.percent),
+                "delta": (None if r.delta is None else float(r.delta)),
+            }
+            for r in rows
+        ]
+
+        # predchádzajúci rok – rovnaké dni (s ošetrením 29.2.)
+        prev_rows = []
         for r in rows:
-            out.append([
-                str(r.date),
-                float(r.percent),
-                (None if r.delta is None else float(r.delta)),
-                r.comment or ""
-            ])
-        return out
+            try:
+                prev_date = r.date.replace(year=r.date.year - 1)
+            except ValueError:
+                from datetime import timedelta as _td
+                prev_date = r.date - _td(days=365)
+
+            prev = (
+                sess.query(GasStorageDaily)
+                .filter(GasStorageDaily.date == prev_date)
+                .first()
+            )
+            if prev:
+                prev_rows.append({"date": str(prev.date), "percent": float(prev.percent)})
+            else:
+                prev_rows.append(
+                    {
+                        "date": str(prev_date),
+                        "percent": float(records[0]["percent"]) if records else 0.0,
+                    }
+                )
+
+        # DÔLEŽITÉ: explicitný return
+        return {"records": records, "prev_year": prev_rows}
     finally:
         sess.close()
-
 
 @app.get("/api/export.csv")
 def api_export_csv(days: int = 30):
