@@ -77,13 +77,13 @@ async function fetchJson(url){ const r = await fetch(url); if(!r.ok) throw new E
 
 async function render(days){
   // karty
-  const todayResp = await fetch("/api/today");
+  const hist = await fetchJson(`/api/history?days=${days}`);
   if (todayResp.status !== 200){
     document.body.innerHTML = "<p>Zatiaľ nemáme dáta. Spusť cron alebo endpoint /api/run-daily.</p>";
     return;
   }
   const today = await todayResp.json();
-  const history = await fetchJson(`/api/history?days=${days}`);
+  const hist = await fetchJson(`/api/history?days=${days}`);
 
   const cards = document.getElementById("cards");
   const delta = today.delta===null ? "—" : (today.delta>0?("+"+today.delta.toFixed(2)+" %"):(today.delta.toFixed(2)+" %"));
@@ -111,7 +111,7 @@ async function render(days){
         </tr>
       </thead>
       <tbody>
-        ${history.records.map(r=>`
+        ${hist.records.map(r=>`
           <tr>
             <td style="padding:8px;border-bottom:1px solid #f3f4f6;">${r.date}</td>
             <td style="padding:8px;border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
@@ -124,9 +124,9 @@ async function render(days){
 
   // graf
   const ctx = document.getElementById("chart");
-  const cur = history.records.map(r=>r.percent);
-  const prev = history.prev_year.map(r=>r.percent);
-  const labels = history.records.map(r=>r.date);
+  const cur = hist.records.map(r=>r.percent);
+  const prev = hist.prev_year.map(r=>r.percent);
+  const labels = hist.records.map(r=>r.date);
 
   const W = ctx.clientWidth, H = ctx.clientHeight;
   const dpi = window.devicePixelRatio || 1; ctx.width = W*dpi; ctx.height = H*dpi;
