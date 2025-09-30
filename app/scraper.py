@@ -69,18 +69,11 @@ AGSI_API_KEY = os.getenv("AGSI_API_KEY", "")
 
 def _agsi_fetch_all(from_date: str) -> list[dict]:
     """
-    Stiahne všetky strany (page 1..last_page) z AGSI pre EU aggregated.
-    Navyše skúsi aj alternatívne hodnoty 'type' ak by jedna vracala prázdno.
+    Stiahne všetky strany (page 1..last_page) z AGSI pre EU aggregated, dataset=storage.
+    Skúsi viac variant 'type' (aggregated / AGGREGATED / bez type), ak by jedna vracala prázdno.
     """
     headers = {"x-key": AGSI_API_KEY}
     url = "https://agsi.gie.eu/api"
-    base = {
-        "country": "EU",
-        "from": from_date,
-        "to": dt.date.today().isoformat(),
-        "size": 5000,          # veľká strana, nech netreba desiatky requestov
-        "type": "aggregated",  # primárna voľba
-    }
 
     def fetch_pages(params: dict) -> list[dict]:
         out: list[dict] = []
@@ -92,18 +85,41 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
             r = requests.get(url, params=p, headers=headers, timeout=60)
             r.raise_for_status()
             j = r.json()
-            data = j.get("data") if isinstance(j, dict) else None
             if isinstance(j, dict):
                 last_page = int(j.get("last_page", 1) or 1)
+                data = j.get("data")
+            else:
+                data = None
             if isinstance(data, list) and data:
                 out.extend(data)
             page += 1
         return out
 
+    base = {
+        "dataset": "storage",           # 🔑 bez tohto býva prázdno
+        "country": "EU",
+        "from": from_date,
+        "to": dt.date.today().isoformat(),
+        "size": 5000,                   # veľká strana, menej requestov
+        "gas_day": "asc",               # nech ideme od starších k novým (nepovinné)
+    }
+
     # 1) type=aggregated
-    rows = fetch_pages(base)
+    params1 = dict(base); params1["type"] = "aggregated"
+    rows = fetch_pages(params1)
     if rows:
         return rows
+
+    # 2) type=AGGREGATED
+    params2 = dict(base); params2["type"] = "AGGREGATED"
+    rows = fetch_pages(params2)
+    if rows:
+        return rows
+
+    # 3) bez 'type'
+    params3 = dict(base); params3.pop("type", None)
+    rows = fetch_pages(params3)
+    return rows
 
     # 2) type=AGGREGATED
     base2 = dict(base); base2["type"] = "AGGREGATED"
