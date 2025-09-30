@@ -229,16 +229,15 @@ def api_agsi_probe(from_: str = Query("2025-01-01", alias="from")):
         return JSONResponse({"ok": False, "error": "Missing AGSI_API_KEY"}, status_code=400)
 
     url = "https://agsi.gie.eu/api"
+ 
     params = {
-        "dataset": "storage",      # dôležité
-        "country": "EU",
-        "from": from_,
-        "to": dt.date.today().isoformat(),
-        "type": "aggregated",
-        "size": 5000,
-        "gas_day": "asc",
-        "page": 1,
-    }
+    "type": "eu",
+    "from": from_,
+    "to": dt.date.today().isoformat(),
+    "size": 5000,
+    "gas_day": "asc",
+    "page": 1,
+}
     r = requests.get(url, params=params, headers={"x-key": key}, timeout=60)
 
     try:
