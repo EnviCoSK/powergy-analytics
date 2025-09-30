@@ -14,10 +14,9 @@ Bez žiadnych predslovov, bez odrážok, zrozumiteľne.
     try:
         resp = client.chat.completions.create(
             model="gpt-5",
-            messages=[{"role": "user", "content": prompt}],
-            # POZOR: bez parametra temperature (model vyžaduje default)
+            messages=[{"role": "user", "content": prompt}]
+            # bez: temperature
         )
         return resp.choices[0].message.content.strip()
-    except Exception as e:
-        # fallback: nech sa uloží aspoň číslo a delta, aj keď komentár zlyhá
+    except Exception:
         return "Komentár dočasne nedostupný (GPT)."
