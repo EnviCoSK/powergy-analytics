@@ -75,6 +75,14 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
     headers = {"x-key": AGSI_API_KEY}
     url = "https://agsi.gie.eu/api"
 
+def _agsi_fetch_all(from_date: str) -> list[dict]:
+    """
+    Stiahne všetky stránky agregovaných dát pre celú EÚ (type=eu).
+    Žiadny 'country', žiadny 'dataset'. Paginácia podľa 'last_page'.
+    """
+    headers = {"x-key": AGSI_API_KEY}
+    url = "https://agsi.gie.eu/api"
+
     def fetch_pages(params: dict) -> list[dict]:
         out: list[dict] = []
         page = 1
@@ -85,24 +93,22 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
             r = requests.get(url, params=p, headers=headers, timeout=60)
             r.raise_for_status()
             j = r.json()
-            if isinstance(j, dict):
-                last_page = int(j.get("last_page", 1) or 1)
-                data = j.get("data")
-            else:
-                data = None
+            last_page = int((j.get("last_page") or 1)) if isinstance(j, dict) else 1
+            data = j.get("data") if isinstance(j, dict) else None
             if isinstance(data, list) and data:
                 out.extend(data)
             page += 1
         return out
 
     base = {
-        "dataset": "storage",           # 🔑 bez tohto býva prázdno
-        "country": "EU",
+        "type": "eu",                    # 🔑 kľúčové
         "from": from_date,
         "to": dt.date.today().isoformat(),
         "size": 5000,                   # veľká strana, menej requestov
-        "gas_day": "asc",               # nech ideme od starších k novým (nepovinné)
+        "gas_day": "asc",               # staršie → novšie
     }
+
+    return fetch_pages(base)
 
     # 1) type=aggregated
     params1 = dict(base); params1["type"] = "aggregated"
@@ -147,7 +153,7 @@ def backfill_agsi(from_date: str = "2025-01-01"):
     try:
         for row in rows:
             # dátum môže byť 'gasDayStart' alebo 'gas_day'
-            d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
+           d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
             # percentá bývajú 'full' | 'fullness' | 'percentage'
             p = row.get("full") or row.get("fullness") or row.get("percentage")
             if not d or p is None:
