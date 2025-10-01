@@ -1,3 +1,4 @@
+from . import models
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse  # ← pridaj sem
@@ -8,7 +9,6 @@ import io, csv  # ← kľudne sem (modulovo)
 
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
-from . import models  # zabezpečí registráciu tabuliek v Base.metadata
 
 app = FastAPI(title="Powergy Analytics – Alfa", default_response_class=ORJSONResponse)
 app.add_middleware(GZipMiddleware, minimum_size=512)
@@ -495,5 +495,28 @@ def api_recompute_deltas():
     except Exception as e:
         sess.rollback()
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+@app.get("/api/health")
+def api_health():
+    return {"ok": True}
+
+@app.get("/api/db-stats")
+def api_db_stats():
+    sess = SessionLocal()
+    try:
+        count = sess.query(GasStorageDaily).count()
+        last = (
+            sess.query(GasStorageDaily)
+            .order_by(GasStorageDaily.date.desc())
+            .first()
+        )
+        return {
+            "ok": True,
+            "rows": count,
+            "last_date": (str(last.date) if last else None),
+            "last_percent": (float(last.percent) if last else None),
+        }
     finally:
         sess.close()
