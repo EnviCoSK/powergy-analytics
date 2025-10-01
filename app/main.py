@@ -7,6 +7,7 @@ import io, csv  # ← kľudne sem (modulovo)
 
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
+from . import models  # zabezpečí registráciu tabuliek v Base.metadata
 
 app = FastAPI(title="Powergy Analytics – Alfa")
 
