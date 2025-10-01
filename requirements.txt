@@ -9,3 +9,4 @@ pydantic
 jinja2
 requests
 openpyxl
+orjson
