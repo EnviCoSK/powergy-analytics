@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse  # ← pridaj sem
 from sqlalchemy import desc
@@ -296,6 +296,9 @@ def api_today():
 
 @app.get("/api/history", response_class=JSONResponse)
 def api_history(days: int = 30):
+    resp = JSONResponse({"records": records, "prev_year": prev_year})
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
     """
     Vráti posledných N dní (vzostupne) + matching hodnoty z predchádzajúceho roka,
     ale iba s DVOMA SQL dotazmi (žiadne N-dotazov).
