@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # ← pridaj sem
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse  # ← pridaj sem
 from sqlalchemy import desc
 from datetime import timedelta
 from jinja2 import Template
@@ -9,7 +10,8 @@ from .database import SessionLocal, init_db
 from .models import GasStorageDaily
 from . import models  # zabezpečí registráciu tabuliek v Base.metadata
 
-app = FastAPI(title="Powergy Analytics – Alfa")
+app = FastAPI(title="Powergy Analytics – Alfa", default_response_class=ORJSONResponse)
+app.add_middleware(GZipMiddleware, minimum_size=512)
 
 INDEX_HTML = Template("""<!doctype html>
 <html lang="sk">
