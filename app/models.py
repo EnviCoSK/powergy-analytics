@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, Float, Integer, Index
+from sqlalchemy import Column, Date, Float, Integer, Index, String
 from .database import Base
 
 class GasStorageDaily(Base):
