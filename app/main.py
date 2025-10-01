@@ -1,17 +1,21 @@
-from . import models
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse  # ← pridaj sem
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
 from sqlalchemy import desc
 from datetime import timedelta
 from jinja2 import Template
-import io, csv  # ← kľudne sem (modulovo)
+import io, csv
 
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
+from . import models  # <<< PRIDANÉ
 
 app = FastAPI(title="Powergy Analytics – Alfa", default_response_class=ORJSONResponse)
 app.add_middleware(GZipMiddleware, minimum_size=512)
+
+@app.on_event("startup")
+def startup():
+    init_db()
 
 INDEX_HTML = Template("""<!doctype html>
 <html lang="sk">
