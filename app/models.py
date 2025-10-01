@@ -1,14 +1,14 @@
-from sqlalchemy.orm import declarative_base, mapped_column
-from sqlalchemy import Integer, Float, Date, Text, UniqueConstraint
-
-Base = declarative_base()
+from sqlalchemy import Column, Date, Float, Integer, Index
+from .database import Base
 
 class GasStorageDaily(Base):
     __tablename__ = "gas_storage_daily"
-    id = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date = mapped_column(Date, nullable=False, unique=True)
-    percent = mapped_column(Float, nullable=False)
-    delta = mapped_column(Float, nullable=True)
-    comment = mapped_column(Text, nullable=True)
 
-    __table_args__ = (UniqueConstraint("date", name="uq_gs_date"),)
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, index=True, unique=True, nullable=False)
+    percent = Column(Float, nullable=False)
+    delta = Column(Float)
+    comment = Column(Float)
+
+# 🔑 pridaj index aj explicitne (nie je nutné, ale odporúča sa)
+Index("idx_gsd_date", GasStorageDaily.date)
