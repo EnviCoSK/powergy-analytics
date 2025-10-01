@@ -294,19 +294,19 @@ def api_today():
 @app.get("/api/history", response_class=JSONResponse)
 def api_history(days: int = 30):
     """
-    Vráti posledných N dní v poradí od najstaršieho po najnovší
-    + matching hodnoty z predchádzajúceho roka.
+    Vráti posledných N dní (vzostupne) + matching hodnoty z predchádzajúceho roka,
+    ale iba s DVOMA SQL dotazmi (žiadne N-dotazov).
     """
     sess = SessionLocal()
     try:
-        # posledných N dní (vezmeme zostupne a otočíme na vzostupne)
+        # 1) posledných N dní
         rows = (
             sess.query(GasStorageDaily)
             .order_by(GasStorageDaily.date.desc())
             .limit(days)
             .all()
         )
-        rows = list(reversed(rows))
+        rows = list(reversed(rows))  # vzostupne
 
         records = [
             {
@@ -317,35 +317,40 @@ def api_history(days: int = 30):
             for r in rows
         ]
 
-        # predchádzajúci rok – rovnaké dni (s ošetrením 29.2.)
-        prev_rows = []
+        if not records:
+            return {"records": [], "prev_year": []}
+
+        # 2) pripravíme zoznam dátumov „pred rokom“ (ošetrenie 29.2.)
+        prev_date_list = []
+        fallback_value = float(records[0]["percent"])
         for r in rows:
+            d = r.date
             try:
-                prev_date = r.date.replace(year=r.date.year - 1)
+                prev_date_list.append(d.replace(year=d.year - 1))
             except ValueError:
-                from datetime import timedelta as _td
-                prev_date = r.date - _td(days=365)
+                prev_date_list.append(d - timedelta(days=365))
 
-            prev = (
-                sess.query(GasStorageDaily)
-                .filter(GasStorageDaily.date == prev_date)
-                .first()
-            )
-            if prev:
-                prev_rows.append({"date": str(prev.date), "percent": float(prev.percent)})
-            else:
-                prev_rows.append(
-                    {
-                        "date": str(prev_date),
-                        "percent": float(records[0]["percent"]) if records else 0.0,
-                    }
-                )
+        # 3) jedným dotazom natiahneme všetky „pred-rokom“ z DB
+        prev_rows = (
+            sess.query(GasStorageDaily.date, GasStorageDaily.percent)
+            .filter(GasStorageDaily.date.in_(prev_date_list))
+            .all()
+        )
+        prev_map = {d: float(p) for (d, p) in prev_rows}
 
-        # DÔLEŽITÉ: explicitný return
-        return {"records": records, "prev_year": prev_rows}
+        # 4) zoradíme presne k našim N dňom
+        prev_year = []
+        for i, r in enumerate(rows):
+            d = prev_date_list[i]
+            prev_year.append({
+                "date": str(d),
+                "percent": prev_map.get(d, fallback_value),
+            })
+
+        return {"records": records, "prev_year": prev_year}
     finally:
         sess.close()
-
+      
 @app.get("/api/export.csv")
 def api_export_csv(days: int = 30):
     buff = io.StringIO()
