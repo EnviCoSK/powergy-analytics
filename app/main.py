@@ -512,44 +512,17 @@ def api_db_stats():
     try:
         total = sess.query(func.count(GasStorageDaily.id)).scalar() or 0
         last = (
-            sess.query(GasStorageDaily)
+            sess.query(GasStorageDaily.date, GasStorageDaily.percent)  # ← len tieto stĺpce
             .order_by(GasStorageDaily.date.desc())
             .first()
         )
         return {
             "ok": True,
             "rows": int(total),
-            "last_date": (str(last.date) if last else None),
-            "last_percent": (float(last.percent) if last and last.percent is not None else None),
+            "last_date": (str(last[0]) if last else None),
+            "last_percent": (float(last[1]) if last and last[1] is not None else None),
         }
     except Exception as e:
-        return JSONResponse({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
-    finally:
-        sess.close()
-
-@app.get("/api/db-stats", response_class=JSONResponse)
-def api_db_stats():
-    sess = SessionLocal()
-    try:
-        # 1) Overíme, či existuje tabuľka
-        exists = sess.execute(text("SELECT to_regclass('public.gas_storage_daily')")).scalar()
-        if exists is None:
-            return {"ok": False, "error": "table_missing", "hint": "Tabuľka public.gas_storage_daily neexistuje. Skús /api/init-db a potom import."}
-
-        # 2) Vypočítame štatistiky
-        count = sess.execute(text("SELECT COUNT(*) FROM public.gas_storage_daily")).scalar()
-        last_row = sess.execute(
-            text("SELECT date, percent FROM public.gas_storage_daily ORDER BY date DESC LIMIT 1")
-        ).mappings().first()
-
-        return {
-            "ok": True,
-            "rows": int(count or 0),
-            "last_date": (str(last_row["date"]) if last_row else None),
-            "last_percent": (float(last_row["percent"]) if last_row and last_row["percent"] is not None else None),
-        }
-    except Exception as e:
-        # vraciame text chyby, aby si ju hneď videl
         return JSONResponse({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
     finally:
         sess.close()
