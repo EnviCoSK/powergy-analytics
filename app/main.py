@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
-from sqlalchemy import desc
+from sqlalchemy import desc, text, inspect
 from datetime import timedelta
 from jinja2 import Template
 import io, csv
@@ -524,3 +524,45 @@ def api_db_stats():
         }
     finally:
         sess.close()
+
+@app.get("/api/db-stats", response_class=JSONResponse)
+def api_db_stats():
+    sess = SessionLocal()
+    try:
+        # 1) Overíme, či existuje tabuľka
+        exists = sess.execute(text("SELECT to_regclass('public.gas_storage_daily')")).scalar()
+        if exists is None:
+            return {"ok": False, "error": "table_missing", "hint": "Tabuľka public.gas_storage_daily neexistuje. Skús /api/init-db a potom import."}
+
+        # 2) Vypočítame štatistiky
+        count = sess.execute(text("SELECT COUNT(*) FROM public.gas_storage_daily")).scalar()
+        last_row = sess.execute(
+            text("SELECT date, percent FROM public.gas_storage_daily ORDER BY date DESC LIMIT 1")
+        ).mappings().first()
+
+        return {
+            "ok": True,
+            "rows": int(count or 0),
+            "last_date": (str(last_row["date"]) if last_row else None),
+            "last_percent": (float(last_row["percent"]) if last_row and last_row["percent"] is not None else None),
+        }
+    except Exception as e:
+        # vraciame text chyby, aby si ju hneď videl
+        return JSONResponse({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+@app.get("/api/db-tables", response_class=JSONResponse)
+def api_db_tables():
+    # Pre istotu vypíšeme tabuľky, ktoré SQLAlchemy vidí
+    insp = inspect(SessionLocal().get_bind())
+    return {"ok": True, "tables": insp.get_table_names(schema="public")}
+
+@app.post("/api/init-db", response_class=JSONResponse)
+def api_init_db():
+    # nútene spustí create_all (ak by neprebehlo pri startupe)
+    try:
+        init_db()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
