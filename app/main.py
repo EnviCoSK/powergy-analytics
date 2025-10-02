@@ -2,7 +2,7 @@ from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
 from sqlalchemy import desc, func, text, inspect
-from datetime import timedelta
+from datetime import date as D, timedelta as TD
 from jinja2 import Template
 import io, csv
 
@@ -300,64 +300,69 @@ def api_today():
 
 @app.get("/api/history", response_class=JSONResponse)
 def api_history(days: int = 30):
-    resp = JSONResponse({"records": records, "prev_year": prev_year})
-    resp.headers["Cache-Control"] = "public, max-age=30"
-    return resp
-    """
-    Vráti posledných N dní (vzostupne) + matching hodnoty z predchádzajúceho roka,
-    ale iba s DVOMA SQL dotazmi (žiadne N-dotazov).
-    """
+    # zdravé limity
+    try:
+        days = int(days)
+    except Exception:
+        days = 30
+    if days <= 0 or days > 366:
+        days = 30
+
     sess = SessionLocal()
     try:
-        # 1) posledných N dní
-        rows = (
+        # posledných N dní (ASC, aby graf kreslil zľava doprava)
+        q = (
             sess.query(GasStorageDaily)
             .order_by(GasStorageDaily.date.desc())
             .limit(days)
-            .all()
         )
-        rows = list(reversed(rows))  # vzostupne
+        rows = list(reversed(q.all()))
 
-        records = [
-            {
-                "date": str(r.date),
-                "percent": float(r.percent),
-                "delta": (None if r.delta is None else float(r.delta)),
-            }
-            for r in rows
-        ]
+        # keď nemáme nič, vráť prázdne polia (200 OK – UI to zvládne)
+        if not rows:
+            resp = JSONResponse({"records": [], "prev_year": []})
+            resp.headers["Cache-Control"] = "public, max-age=30"
+            return resp
 
-        if not records:
-            return {"records": [], "prev_year": []}
-
-        # 2) pripravíme zoznam dátumov „pred rokom“ (ošetrenie 29.2.)
-        prev_date_list = []
-        fallback_value = float(records[0]["percent"])
+        records = []
         for r in rows:
-            d = r.date
-            try:
-                prev_date_list.append(d.replace(year=d.year - 1))
-            except ValueError:
-                prev_date_list.append(d - timedelta(days=365))
-
-        # 3) jedným dotazom natiahneme všetky „pred-rokom“ z DB
-        prev_rows = (
-            sess.query(GasStorageDaily.date, GasStorageDaily.percent)
-            .filter(GasStorageDaily.date.in_(prev_date_list))
-            .all()
-        )
-        prev_map = {d: float(p) for (d, p) in prev_rows}
-
-        # 4) zoradíme presne k našim N dňom
-        prev_year = []
-        for i, r in enumerate(rows):
-            d = prev_date_list[i]
-            prev_year.append({
-                "date": str(d),
-                "percent": prev_map.get(d, fallback_value),
+            records.append({
+                "date": str(r.date),
+                "percent": round(float(r.percent), 2),
+                "delta": None if r.delta is None else round(float(r.delta), 2),
             })
 
-        return {"records": records, "prev_year": prev_year}
+        # okno pre minulý rok – batch query (žiadne per-row dotazy)
+        start_prev = rows[0].date - TD(days=365)
+        end_prev   = rows[-1].date - TD(days=365)
+
+        prev_rows = (
+            sess.query(GasStorageDaily)
+            .filter(GasStorageDaily.date >= start_prev,
+                    GasStorageDaily.date <= end_prev)
+            .all()
+        )
+        by_date = {p.date: p for p in prev_rows}
+
+        baseline = records[0]["percent"]  # fallback, aby graf nikdy nespadol
+        prev_year = []
+        for r in rows:
+            key = r.date - TD(days=365)
+            pr = by_date.get(key)
+            if pr:
+                prev_year.append({"date": str(pr.date),
+                                  "percent": round(float(pr.percent), 2)})
+            else:
+                # keď AGSI/DB nemá presný „-365 dní“, daj baseline
+                prev_year.append({"date": str(key), "percent": baseline})
+
+        resp = JSONResponse({"records": records, "prev_year": prev_year})
+        resp.headers["Cache-Control"] = "public, max-age=30"  # krátka cache
+        return resp
+
+    except Exception as e:
+        # vrátime info, aby UI/logy ukázali konkrétne, čo sa stalo
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
       
