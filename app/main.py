@@ -6,6 +6,11 @@ from datetime import date as D, timedelta as TD
 from jinja2 import Template
 import io, csv
 
+try:
+    import openpyxl   # pre Excel export
+except Exception:
+    openpyxl = None
+
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
 from . import models  # <<< PRIDANÉ
@@ -583,3 +588,49 @@ def api_init_db():
         return {"ok": True}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.get("/api/export", response_class=StreamingResponse)
+def api_export(fmt: str = "csv", days: int = 30):
+    sess = SessionLocal()
+    try:
+        rows = (
+            sess.query(GasStorageDaily)
+            .order_by(GasStorageDaily.date.desc())
+            .limit(days)
+            .all()
+        )
+        rows = list(reversed(rows))
+
+        if fmt.lower() == "csv":
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["date", "percent", "delta"])
+            for r in rows:
+                w.writerow([str(r.date), f"{r.percent:.2f}", "" if r.delta is None else f"{r.delta:.2f}"])
+            buf.seek(0)
+            return StreamingResponse(
+                iter([buf.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": 'attachment; filename="powergy_gas_storage.csv"'}
+            )
+        elif fmt.lower() in ("xlsx", "xls"):
+            if openpyxl is None:
+                return JSONResponse({"ok": False, "error": "Excel export nie je povolený (chýba openpyxl)."}, status_code=400)
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "gas_storage"
+            ws.append(["date", "percent", "delta"])
+            for r in rows:
+                ws.append([str(r.date), float(f"{r.percent:.2f}"), None if r.delta is None else float(f"{r.delta:.2f}")])
+            xbuf = io.BytesIO()
+            wb.save(xbuf)
+            xbuf.seek(0)
+            return StreamingResponse(
+                xbuf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": 'attachment; filename="powergy_gas_storage.xlsx"'}
+            )
+        else:
+            return JSONResponse({"ok": False, "error": "Unknown format"}, status_code=400)
+    finally:
+        sess.close()
