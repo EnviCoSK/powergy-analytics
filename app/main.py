@@ -87,11 +87,11 @@ INDEX_HTML = Template("""<!doctype html>
 <script>
 (() => {
   // UI prvky
-  const rangeEl = document.getElementById('range') || document.querySelector('select');
+  const rangeEl = document.getElementById('rangeSel') || document.querySelector('select');
   const chartEl = document.getElementById('chart');
   const tableEl = document.getElementById('table');
-  const btnCsv  = document.getElementById('btn-csv')  || document.querySelector('[data-export="csv"]');
-  const btnXls  = document.getElementById('btn-xlsx') || document.querySelector('[data-export="xlsx"]');
+  const btnCsv  = document.getElementById('btnCsv');
+  const btnXls  = document.getElementById('btnXlsx');
 
   // stav + cache
   const cache = new Map();
