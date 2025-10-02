@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
-from sqlalchemy import desc, text, inspect
+from sqlalchemy import desc, func, text, inspect
 from datetime import timedelta
 from jinja2 import Template
 import io, csv
@@ -506,11 +506,11 @@ def api_recompute_deltas():
 def api_health():
     return {"ok": True}
 
-@app.get("/api/db-stats")
+@app.get("/api/db-stats", response_class=JSONResponse)
 def api_db_stats():
     sess = SessionLocal()
     try:
-        count = sess.query(GasStorageDaily).count()
+        total = sess.query(func.count(GasStorageDaily.id)).scalar() or 0
         last = (
             sess.query(GasStorageDaily)
             .order_by(GasStorageDaily.date.desc())
@@ -518,10 +518,12 @@ def api_db_stats():
         )
         return {
             "ok": True,
-            "rows": count,
+            "rows": int(total),
             "last_date": (str(last.date) if last else None),
-            "last_percent": (float(last.percent) if last else None),
+            "last_percent": (float(last.percent) if last and last.percent is not None else None),
         }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
     finally:
         sess.close()
 
