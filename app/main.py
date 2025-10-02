@@ -203,26 +203,61 @@ INDEX_HTML = Template("""<!doctype html>
     // aktuálny rok
     line(cur, false, "#2563eb");
 
-    // hover bod + label
-    if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
-      const x = X(hoverIdx,nx), y = Y(cur[hoverIdx]);
-      // bod
-      g.fillStyle = "#2563eb";
-      g.beginPath(); g.arc(x,y,4,0,Math.PI*2); g.fill();
+  // hover bod + label (2025 + 2024)
+if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
+  const x = X(hoverIdx,nx);
+  const vCur = cur[hoverIdx];
+  const hasPrev = Array.isArray(ref) && ref.length === nx;   // zarovnané na rovnaké indexy
+  const vPrev = hasPrev ? ref[hoverIdx] : null;
 
-      // label
-      const label = `${records[hoverIdx].date} — ${cur[hoverIdx].toFixed(2)} %`;
-      g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-      const pad=6;
-      const tw = Math.ceil(g.measureText(label).width)+pad*2;
-      const th = 22;
-      const lx = Math.min(Math.max(x - tw/2, left), W - right - tw);
-      const ly = Math.max(y - th - 10, top);
-      g.fillStyle = "rgba(11,18,33,0.85)";
-      g.fillRect(lx, ly, tw, th);
-      g.fillStyle = "white";
-      g.fillText(label, lx+pad, ly+th-7);
-    }
+  // vodiaca čiara
+  g.save();
+  g.strokeStyle = "rgba(0,0,0,.15)";
+  g.setLineDash([4,4]);
+  g.beginPath(); g.moveTo(x, top); g.lineTo(x, H-bottom); g.stroke();
+  g.restore();
+
+  // body
+  // 2025
+  const yCur = Y(vCur);
+  g.fillStyle = "#2563eb";
+  g.beginPath(); g.arc(x,yCur,4,0,Math.PI*2); g.fill();
+
+  // 2024 (ak je)
+  if(vPrev!=null){
+    const yPrev = Y(vPrev);
+    g.fillStyle = "#9ec5fe";
+    g.beginPath(); g.arc(x,yPrev,4,0,Math.PI*2); g.fill();
+  }
+
+  // label (dvojriadkový)
+  const date = records[hoverIdx].date;
+  const line1 = `2025: ${vCur.toFixed(2)} %`;
+  const line2 = (vPrev!=null) ? `2024: ${vPrev.toFixed(2)} %` : '';
+  const pad = 6;
+  g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  const w1 = g.measureText(`${date}`).width;
+  const w2 = g.measureText(line1).width;
+  const w3 = g.measureText(line2).width;
+  const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
+  const lineH = 16; // výška riadku
+  const lines = (vPrev!=null) ? 3 : 2;
+  const boxH = lineH*lines + 6;
+
+  const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
+  const ly = Math.max(yCur - boxH - 10, top);
+
+  // podklad
+  g.fillStyle = "rgba(11,18,33,0.90)";
+  g.fillRect(lx, ly, boxW, boxH);
+
+  // texty
+  g.fillStyle = "white";
+  let ty = ly + 14;
+  g.fillText(date, lx+pad, ty); ty += lineH;
+  g.fillText(line1, lx+pad, ty); ty += lineH;
+  if(vPrev!=null) g.fillText(line2, lx+pad, ty);
+}
   }
 
   async function fetchHistory(days){
