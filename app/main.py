@@ -81,17 +81,23 @@ INDEX_HTML = Template("""<!doctype html>
 
 <script>
 (() => {
-  // UI prvky – ak máš svoj vlastný ID pre select, nechaj "range",
-  // inak si môžeš zmeniť query podľa svojej HTML štruktúry.
+  // UI prvky
   const rangeEl = document.getElementById('range') || document.querySelector('select');
   const chartEl = document.getElementById('chart');
   const tableEl = document.getElementById('table');
+  const btnCsv  = document.getElementById('btn-csv')  || document.querySelector('[data-export="csv"]');
+  const btnXls  = document.getElementById('btn-xlsx') || document.querySelector('[data-export="xlsx"]');
 
-  // jednoduchá cache podľa kľúča "days"
+  // stav + cache
   const cache = new Map();
+  let state = {
+    records: [],
+    prev: [],
+    hoverIdx: null,
+    scale: null   // uložíme si X/Y škále pre hover
+  };
 
   function showMsg(text){
-    // jemná správa pod grafom (nech nie je v ceste)
     let m = document.getElementById('msg');
     if(!m){
       m = document.createElement('div');
@@ -137,8 +143,8 @@ INDEX_HTML = Template("""<!doctype html>
     `;
   }
 
-  function drawChart(curRecords, prevYear){
-    // pripravíme canvas (HiDPI)
+  function drawChart(records, prev, hoverIdx=null){
+    // HiDPI canvas
     const cssW = chartEl.clientWidth || 980;
     const cssH = 320;
     const dpi = window.devicePixelRatio || 1;
@@ -148,21 +154,25 @@ INDEX_HTML = Template("""<!doctype html>
     chartEl.style.height = cssH+'px';
 
     const g = chartEl.getContext('2d');
-    g.setTransform(dpi,0,0,dpi,0,0); // kreslíme v CSS pixeloch
+    g.setTransform(dpi,0,0,dpi,0,0);
 
     const W = cssW, H = cssH;
     g.clearRect(0,0,W,H);
     showMsg('');
 
-    const cur = curRecords.map(r=>r.percent);
-    const prev = (prevYear||[]).map(r=>r.percent);
+    const cur = records.map(r=>r.percent);
+    const ref = (prev||[]).map(r=>r.percent);
 
-    const max = Math.max(...cur, ...(prev.length?prev:[-Infinity]));
-    const min = Math.min(...cur, ...(prev.length?prev:[Infinity]));
+    const max = Math.max(...cur, ...(ref.length?ref:[-Infinity]));
+    const min = Math.min(...cur, ...(ref.length?ref:[Infinity]));
 
     const left=40, right=10, top=10, bottom=30;
+    const nx = cur.length;
     const X = (i,n)=> left + i*((W-left-right)/Math.max(1,n-1));
     const Y = v => top + (H-top-bottom) * (1 - ((v-min)/Math.max(1,(max-min))));
+
+    // uložíme škálu pre hover
+    state.scale = {left,right,top,bottom,W,H,min,max, nx, X:(i)=>X(i,nx), Y};
 
     function line(data, dashed, color){
       if(!data.length) return;
@@ -183,18 +193,41 @@ INDEX_HTML = Template("""<!doctype html>
     g.strokeStyle="#e5e7eb";
     g.beginPath(); g.moveTo(left,H-bottom); g.lineTo(W-right,H-bottom); g.stroke();
 
-    // 2024 (referencia) – svetlejšou, čiarkovanou
-    if(prev.length) line(prev, true, "#9ec5fe");
-    // 2025 – plná
+    // referencia 2024
+    if(ref.length) line(ref, true, "#9ec5fe");
+    // aktuálny rok
     line(cur, false, "#2563eb");
+
+    // hover bod + label
+    if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
+      const x = X(hoverIdx,nx), y = Y(cur[hoverIdx]);
+      // bod
+      g.fillStyle = "#2563eb";
+      g.beginPath(); g.arc(x,y,4,0,Math.PI*2); g.fill();
+
+      // label
+      const label = `${records[hoverIdx].date} — ${cur[hoverIdx].toFixed(2)} %`;
+      g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      const pad=6;
+      const tw = Math.ceil(g.measureText(label).width)+pad*2;
+      const th = 22;
+      const lx = Math.min(Math.max(x - tw/2, left), W - right - tw);
+      const ly = Math.max(y - th - 10, top);
+      g.fillStyle = "rgba(11,18,33,0.85)";
+      g.fillRect(lx, ly, tw, th);
+      g.fillStyle = "white";
+      g.fillText(label, lx+pad, ly+th-7);
+    }
   }
 
   async function fetchHistory(days){
     const key = String(days);
     if(cache.has(key)){
       const data = cache.get(key);
-      drawChart(data.records, data.prev_year);
-      renderTable(data.records);
+      state.records = data.records;
+      state.prev    = data.prev_year || [];
+      drawChart(state.records, state.prev, state.hoverIdx);
+      renderTable(state.records);
       return;
     }
     showMsg('Načítavam…');
@@ -209,23 +242,70 @@ INDEX_HTML = Template("""<!doctype html>
       return;
     }
     cache.set(key, data);
-    drawChart(data.records, data.prev_year);
-    renderTable(data.records);
+    state.records = data.records;
+    state.prev    = data.prev_year || [];
+    drawChart(state.records, state.prev, state.hoverIdx);
+    renderTable(state.records);
   }
 
-  // prepínač rozsahu
   function currentRange(){
-    // ak máš vlastný select s hodnotami 30/90/180/365 — nechaj tak
     const v = (rangeEl && rangeEl.value) ? Number(rangeEl.value) : 30;
     return (v && !Number.isNaN(v)) ? v : 30;
   }
 
-  if(rangeEl){
-    rangeEl.addEventListener('change', () => fetchHistory(currentRange()));
+  // EXPORT – len presmerujeme na API s aktuálnym rozsahom
+  function bindExport(){
+    if(btnCsv){
+      btnCsv.addEventListener('click', () => {
+        const d = currentRange();
+        // ak máš iné endpointy (napr. /api/export-csv), zmeň URL tu
+        window.location.href = `/api/export?fmt=csv&days=${encodeURIComponent(d)}`;
+      });
+    }
+    if(btnXls){
+      btnXls.addEventListener('click', () => {
+        const d = currentRange();
+        window.location.href = `/api/export?fmt=xlsx&days=${encodeURIComponent(d)}`;
+      });
+    }
   }
 
-  // po načítaní
-  window.addEventListener('load', ()=> fetchHistory(currentRange()));
+  // HOVER – jednoduchý nearest-point
+  function bindHover(){
+    const onMove = (ev) => {
+      if(!state.scale || !state.records.length) return;
+      const rect = chartEl.getBoundingClientRect();
+      const px = (ev.clientX - rect.left) * (chartEl.width / chartEl.clientWidth);   // fyz. pixely
+      const dpi = window.devicePixelRatio || 1;
+      const xCss = px / dpi; // späť do CSS súradníc
+
+      const {left, right, W, nx} = state.scale;
+      if(xCss < left || xCss > (W - right)) {
+        state.hoverIdx = null;
+        drawChart(state.records, state.prev, state.hoverIdx);
+        return;
+      }
+      const usable = (W - left - right);
+      const t = (xCss - left) / Math.max(1, usable);     // 0..1
+      const idx = Math.round(t * (nx - 1));
+      state.hoverIdx = Math.max(0, Math.min(nx-1, idx));
+      drawChart(state.records, state.prev, state.hoverIdx);
+    };
+
+    chartEl.addEventListener('mousemove', onMove);
+    chartEl.addEventListener('mouseleave', () => {
+      state.hoverIdx = null;
+      if(state.records.length) drawChart(state.records, state.prev, null);
+    });
+  }
+
+  // init
+  if(rangeEl) rangeEl.addEventListener('change', () => fetchHistory(currentRange()));
+  window.addEventListener('load', ()=> {
+    bindExport();
+    bindHover();
+    fetchHistory(currentRange());
+  });
 })();
 </script>
 </body>
