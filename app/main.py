@@ -80,196 +80,153 @@ INDEX_HTML = Template("""<!doctype html>
   </div>
 
 <script>
-async function fetchJson(url){
-  const r = await fetch(url);
-  let body = null;
-  try { body = await r.json(); } catch(_){}
-  if(!r.ok){
-    throw new Error(`${r.status} ${r.statusText} – ${url}\n${JSON.stringify(body)}`);
+(() => {
+  // UI prvky – ak máš svoj vlastný ID pre select, nechaj "range",
+  // inak si môžeš zmeniť query podľa svojej HTML štruktúry.
+  const rangeEl = document.getElementById('range') || document.querySelector('select');
+  const chartEl = document.getElementById('chart');
+  const tableEl = document.getElementById('table');
+
+  // jednoduchá cache podľa kľúča "days"
+  const cache = new Map();
+
+  function showMsg(text){
+    // jemná správa pod grafom (nech nie je v ceste)
+    let m = document.getElementById('msg');
+    if(!m){
+      m = document.createElement('div');
+      m.id = 'msg';
+      m.className = 'muted';
+      chartEl.parentElement.appendChild(m);
+    }
+    m.textContent = text || '';
   }
-  return body;
-}
 
-function showMessage(html){
-  const wrap = document.querySelector(".chart-wrap");
-  const msgId = "inline-msg";
-  let el = document.getElementById(msgId);
-  if(!el){
-    el = document.createElement("div");
-    el.id = msgId;
-    el.style.margin = "8px 0";
-    el.className = "muted";
-    wrap.parentElement.insertBefore(el, wrap.nextSibling);
+  function drawEmpty(msg){
+    const g = chartEl.getContext('2d');
+    const W = chartEl.width, H = chartEl.height;
+    g.clearRect(0,0,W,H);
+    showMsg(msg || 'Žiadne záznamy pre zvolený rozsah.');
+    tableEl.innerHTML = '<div class="muted">Žiadne záznamy</div>';
   }
-  el.innerHTML = html;
-}
 
-function clearMessage(){
-  const el = document.getElementById("inline-msg");
-  if(el) el.remove();
-}
-
-async function render(days){
-  try{
-    clearMessage();
-
-    // 1) dnes
-    const todayResp = await fetch("/api/today");
-    if (todayResp.status !== 200){
-      showMessage("Zatiaľ nemáme dáta. Spusť cron alebo endpoint <code>/api/run-daily</code>.");
+  function renderTable(records){
+    if(!records?.length){
+      tableEl.innerHTML = '<div class="muted">Žiadne záznamy</div>';
       return;
     }
-    const today = await todayResp.json();
-
-    // 2) história
-    const hist = await fetchJson(`/api/history?days=${days}`);
-
-    // 3) karty
-    const cards = document.getElementById("cards");
-    const delta = today.delta===null ? "—" : (today.delta>0?("+"+today.delta.toFixed(2)+" %"):(today.delta.toFixed(2)+" %"));
-    cards.innerHTML = `
-      <div class="card">
-        <div class="muted">Naplnenie zásobníkov (EÚ)</div>
-        <div style="font-size:28px;font-weight:700;">${today.percent.toFixed(2)} %</div>
-        <div class="muted">Denná zmena: ${delta}</div>
-      </div>
-      <div class="card" style="grid-column: span 2;">
-        <div class="muted">Komentár</div>
-        <div>${today.comment}</div>
-      </div>
-    `;
-
-    // 4) ak nemáme záznamy pre zvolený rozsah
-    if(!hist || !Array.isArray(hist.records) || hist.records.length === 0){
-      const ctx = document.getElementById("chart");
-      const g = ctx.getContext("2d");
-      g.clearRect(0,0,ctx.width,ctx.height);
-      document.getElementById("table").innerHTML =
-        '<div class="muted">Žiadne záznamy pre zvolený rozsah.</div>';
-      return;
-    }
-
-    // 5) tabuľka
-    const table = document.getElementById("table");
-    table.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;">
+    tableEl.innerHTML = `
+      <table style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Dátum</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Naplnenie (%)</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Denná zmena</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Dátum</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Naplnenie (%)</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Denná zmena</th>
           </tr>
         </thead>
         <tbody>
-          ${hist.records.map(r=>`
+          ${records.map(r=>`
             <tr>
-              <td style="padding:8px;border-bottom:1px solid #f3f4f6;">${r.date}</td>
-              <td style="padding:8px;border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
-              <td style="padding:8px;border-bottom:1px solid #f3f4f6;">${r.delta===null?"—":r.delta.toFixed(2)}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.date}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.delta==null?'—':r.delta.toFixed(2)}</td>
             </tr>
-          `).join("")}
+          `).join('')}
         </tbody>
       </table>
     `;
+  }
 
-    // 6) graf
-    const ctx = document.getElementById("chart");
-    const cur    = hist.records.map(r=>r.percent);
-    const prev   = (hist.prev_year||[]).map(r=>r.percent);
-    const labels = hist.records.map(r=>r.date);
+  function drawChart(curRecords, prevYear){
+    // pripravíme canvas (HiDPI)
+    const cssW = chartEl.clientWidth || 980;
+    const cssH = 320;
+    const dpi = window.devicePixelRatio || 1;
+    chartEl.width = Math.round(cssW * dpi);
+    chartEl.height = Math.round(cssH * dpi);
+    chartEl.style.width = cssW+'px';
+    chartEl.style.height = cssH+'px';
 
-    const W = ctx.clientWidth, H = ctx.clientHeight;
-    const dpi = window.devicePixelRatio || 1; ctx.width = W*dpi; ctx.height = H*dpi;
-    const g = ctx.getContext("2d"); g.scale(dpi,dpi);
+    const g = chartEl.getContext('2d');
+    g.setTransform(dpi,0,0,dpi,0,0); // kreslíme v CSS pixeloch
 
-    const left=40, right=12, top=16, bottom=30;
-    const innerW = W-left-right, innerH = H-top-bottom;
+    const W = cssW, H = cssH;
+    g.clearRect(0,0,W,H);
+    showMsg('');
 
-    const nums = [...cur, ...prev].filter(v=>typeof v==="number");
-    const vMax = Math.max(...nums), vMin = Math.min(...nums);
-    const X = i => left + (innerW * (cur.length<=1?0.5 : i/(cur.length-1)));
-    const Y = v => top + innerH*(1 - ((v - vMin)/Math.max(1e-9,(vMax - vMin))));
+    const cur = curRecords.map(r=>r.percent);
+    const prev = (prevYear||[]).map(r=>r.percent);
 
-    function axes(){
-      g.fillStyle="#fff"; g.fillRect(0,0,W,H);
-      g.strokeStyle="var(--border)"; g.beginPath(); g.moveTo(left,H-bottom); g.lineTo(W-right,H-bottom); g.stroke();
-    }
-    function line(data, color, dashed=false){
+    const max = Math.max(...cur, ...(prev.length?prev:[-Infinity]));
+    const min = Math.min(...cur, ...(prev.length?prev:[Infinity]));
+
+    const left=40, right=10, top=10, bottom=30;
+    const X = (i,n)=> left + i*((W-left-right)/Math.max(1,n-1));
+    const Y = v => top + (H-top-bottom) * (1 - ((v-min)/Math.max(1,(max-min))));
+
+    function line(data, dashed, color){
       if(!data.length) return;
-      g.save(); if(dashed) g.setLineDash([6,6]); g.strokeStyle=color; g.lineWidth=2;
-      if(data.length>=2){
-        g.beginPath();
-        data.forEach((v,i)=>{ const x=X(i), y=Y(v); if(i===0) g.moveTo(x,y); else g.lineTo(x,y); });
-        g.stroke();
-        g.fillStyle=color;
-        data.forEach((v,i)=>{ const x=X(i), y=Y(v); g.beginPath(); g.arc(x,y,2.2,0,Math.PI*2); g.fill(); });
-      }else{
-        const x=left+innerW/2, y=Y(data[0]);
-        g.fillStyle=color; g.beginPath(); g.arc(x,y,4,0,Math.PI*2); g.fill();
-      }
+      g.save();
+      g.lineWidth = 2;
+      if(dashed) g.setLineDash([6,6]);
+      g.strokeStyle = color;
+      g.beginPath();
+      data.forEach((v,i)=>{
+        const x = X(i,data.length), y = Y(v);
+        if(i===0) g.moveTo(x,y); else g.lineTo(x,y);
+      });
+      g.stroke();
       g.restore();
     }
 
-    axes();
-    if(prev.length) line(prev,"#9ec5fe",true);
-    if(cur.length)  line(cur,"#2563eb",false);
+    // os X
+    g.strokeStyle="#e5e7eb";
+    g.beginPath(); g.moveTo(left,H-bottom); g.lineTo(W-right,H-bottom); g.stroke();
 
-    // 7) tooltip
-    const tt = document.getElementById("tooltip");
-    function showTT(ix, xPix){
-      const d = labels[ix];
-      const vCur = cur[ix];
-      const vPrev = prev[ix] ?? null;
-      tt.innerHTML = `
-        <div><b>${d}</b></div>
-        <div>2025: <b>${(vCur??NaN).toFixed ? vCur.toFixed(2) : "—"}%</b></div>
-        <div>2024: <b>${(vPrev??NaN).toFixed ? vPrev.toFixed(2) : "—"}%</b></div>
-      `;
-      tt.style.opacity = 1;
-      const ttW = tt.offsetWidth; const tx = Math.min(Math.max(8, xPix - ttW/2), W - ttW - 8);
-      const ty = top + 8; tt.style.transform = `translate(${tx}px, ${ty}px)`;
-    }
-    function hideTT(){ tt.style.opacity = 0; }
-
-    if(cur.length){
-      ctx.onmousemove = (e)=>{
-        const rect = ctx.getBoundingClientRect();
-        const x = (e.clientX - rect.left);
-        let bestI = 0, bestD = 1e9;
-        for (let i=0;i<cur.length;i++){
-          const dx = Math.abs(X(i) - x);
-          if (dx < bestD){ bestD = dx; bestI = i; }
-        }
-        axes(); if(prev.length) line(prev,"#9ec5fe",true); if(cur.length) line(cur,"#2563eb",false);
-        g.save(); g.strokeStyle="rgba(0,0,0,.15)"; g.setLineDash([4,4]); g.beginPath();
-        g.moveTo(X(bestI), top); g.lineTo(X(bestI), H-bottom); g.stroke(); g.restore();
-        showTT(bestI, X(bestI));
-      };
-      ctx.onmouseleave = ()=>{ axes(); if(prev.length) line(prev,"#9ec5fe",true); if(cur.length) line(cur,"#2563eb",false); hideTT(); };
-    }
-
-  } catch(err){
-    console.error(err);
-    showMessage("Nepodarilo sa načítať dáta: <code>"+String(err).replace(/[<>]/g,'')+"</code>");
-    const ctx = document.getElementById("chart");
-    const g = ctx.getContext("2d");
-    g.clearRect(0,0,ctx.width,ctx.height);
-    document.getElementById("table").innerHTML = "";
+    // 2024 (referencia) – svetlejšou, čiarkovanou
+    if(prev.length) line(prev, true, "#9ec5fe");
+    // 2025 – plná
+    line(cur, false, "#2563eb");
   }
-}
 
-// ovládanie rozsahu + export
-const sel   = document.getElementById("rangeSel");
-const btnCsv  = document.getElementById("btnCsv");
-const btnXlsx = document.getElementById("btnXlsx");
+  async function fetchHistory(days){
+    const key = String(days);
+    if(cache.has(key)){
+      const data = cache.get(key);
+      drawChart(data.records, data.prev_year);
+      renderTable(data.records);
+      return;
+    }
+    showMsg('Načítavam…');
+    const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
+    if(!r.ok){
+      drawEmpty(`Nepodarilo sa načítať dáta: HTTP ${r.status}`);
+      return;
+    }
+    const data = await r.json();
+    if(!data || !Array.isArray(data.records) || data.records.length===0){
+      drawEmpty('Žiadne záznamy pre zvolený rozsah.');
+      return;
+    }
+    cache.set(key, data);
+    drawChart(data.records, data.prev_year);
+    renderTable(data.records);
+  }
 
-function currentDays(){ return parseInt(sel.value,10); }
-sel.addEventListener("change", ()=>render(currentDays()));
-btnCsv.addEventListener("click", ()=>{ window.location = `/api/export.csv?days=${currentDays()}`; });
-btnXlsx.addEventListener("click", ()=>{ window.location = `/api/export.xlsx?days=${currentDays()}`; });
+  // prepínač rozsahu
+  function currentRange(){
+    // ak máš vlastný select s hodnotami 30/90/180/365 — nechaj tak
+    const v = (rangeEl && rangeEl.value) ? Number(rangeEl.value) : 30;
+    return (v && !Number.isNaN(v)) ? v : 30;
+  }
 
-// prvé načítanie
-render(currentDays());
+  if(rangeEl){
+    rangeEl.addEventListener('change', () => fetchHistory(currentRange()));
+  }
+
+  // po načítaní
+  window.addEventListener('load', ()=> fetchHistory(currentRange()));
+})();
 </script>
 </body>
 </html>
