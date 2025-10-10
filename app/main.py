@@ -372,7 +372,25 @@ def api_today():
     if not row:
         sess.close()
         return JSONResponse({"message":"No data yet"}, status_code=404)
-    out = {"date": str(row.date), "percent": row.percent, "delta": row.delta, "comment": row.comment}
+
+    # rýchly prepočet 7d + yoy pre komentár
+    seven_ago = sess.query(GasStorageDaily)\
+        .filter(GasStorageDaily.date <= row.date - timedelta(days=7))\
+        .order_by(GasStorageDaily.date.desc()).first()
+    trend7 = (row.percent - seven_ago.percent) if seven_ago else 0.0
+    try:
+        prev_date = row.date.replace(year=row.date.year-1)
+    except ValueError:
+        prev_date = row.date - timedelta(days=365)
+    prev_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date==prev_date).first()
+    yoy_gap = row.percent - (prev_row.percent if prev_row else row.percent)
+
+    out = {
+        "date": str(row.date),
+        "percent": row.percent,
+        "delta": row.delta,
+        "comment": generate_comment(row.percent, row.delta, trend7, yoy_gap),
+    }
     sess.close()
     return out
 
