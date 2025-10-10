@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
 from sqlalchemy import desc, func, text, inspect
+from .gpt import generate_comment
 from datetime import date as D, timedelta as TD
 from jinja2 import Template
 import io, csv
@@ -667,5 +668,48 @@ def api_export(fmt: str = "csv", days: int = 30):
             )
         else:
             return JSONResponse({"ok": False, "error": "Unknown format"}, status_code=400)
+    finally:
+        sess.close()
+
+@app.get("/api/insight", response_class=JSONResponse)
+def api_insight(days: int = 30):
+    """
+    Vráti metriku pre dashboard: latest, 7d trend, yoy gap + komentár (GPT s fallbackom).
+    """
+    sess = SessionLocal()
+    try:
+        # posledný záznam
+        last = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        if not last:
+            return JSONResponse({"ok": False, "error": "No data"}, status_code=404)
+
+        # 7-dňový trend (rozdiel percent medzi posledným a hodnotou spred 7 dní)
+        seven_ago = sess.query(GasStorageDaily)\
+            .filter(GasStorageDaily.date <= last.date - timedelta(days=7))\
+            .order_by(GasStorageDaily.date.desc()).first()
+        trend7 = (last.percent - seven_ago.percent) if seven_ago else 0.0
+
+        # YoY gap – pokus o dátum -1 rok (s ošetrením 29.2.)
+        try:
+            prev_date = last.date.replace(year=last.date.year - 1)
+        except ValueError:
+            prev_date = last.date - timedelta(days=365)
+        prev_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
+        yoy_gap = last.percent - (prev_row.percent if prev_row else last.percent)
+
+        # komentár (GPT / fallback)
+        comment = generate_comment(last.percent, last.delta, trend7, yoy_gap)
+
+        return {
+            "ok": True,
+            "latest": {
+                "date": str(last.date),
+                "percent": last.percent,
+                "delta": last.delta,
+            },
+            "trend7": trend7,
+            "yoy_gap": yoy_gap,
+            "comment": comment,
+        }
     finally:
         sess.close()
