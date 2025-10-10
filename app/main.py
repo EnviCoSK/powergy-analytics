@@ -1,35 +1,90 @@
-from fastapi import FastAPI, Query, Response
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
-from sqlalchemy import desc, func, text, inspect
-from sqlalchemy.exc import SQLAlchemyError
-from .gpt import generate_comment
-from datetime import date as D, timedelta as TD
-from jinja2 import Template
+# app/main.py
+from __future__ import annotations
 
+import os
+import io
+import csv
+from datetime import timedelta, date as _date
+
+from fastapi import FastAPI, Query
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from jinja2 import Template
+from sqlalchemy import func, text, inspect
+from sqlalchemy.exc import SQLAlchemyError
+
+# Optional Excel support
 try:
     import openpyxl  # type: ignore
 except Exception:
     openpyxl = None
 
-import io, csv
-
-try:
-    import openpyxl   # pre Excel export
-except Exception:
-    openpyxl = None
-
 from .database import SessionLocal, init_db
 from .models import GasStorageDaily
-from . import models  # <<< PRIDANÉ
 
-app = FastAPI(title="Powergy Analytics – Alfa", default_response_class=ORJSONResponse)
+# -----------------------------------------------------------------------------
+# JSON with explicit UTF-8 to avoid mojibake in some clients
+# -----------------------------------------------------------------------------
+class JSONUTF8Response(JSONResponse):
+    media_type = "application/json; charset=utf-8"
+
+
+app = FastAPI(title="Powergy Analytics – Alfa", default_response_class=JSONUTF8Response)
 app.add_middleware(GZipMiddleware, minimum_size=512)
 
-@app.on_event("startup")
-def startup():
-    init_db()
 
+# -----------------------------------------------------------------------------
+# Helpers: safe comment + mojibake fixer
+# -----------------------------------------------------------------------------
+def fix_mojibake(s: str) -> str:
+    """Try to repair UTF-8 text that was decoded as Latin-1 (e.g., 'ZĂĄsobnĂ­ky')."""
+    if not s:
+        return s
+    if any(ch in s for ch in "ĂÄÅÃÂŠŽŤĎĽĹ"):
+        try:
+            repaired = s.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+            if repaired and repaired != s:
+                return repaired
+        except Exception:
+            pass
+    return s
+
+
+def _fallback_comment(percent: float, delta: float | None) -> str:
+    d = "bez dennej zmeny" if (delta is None or abs(delta) < 0.005) else (
+        f"denná zmena +{delta:.2f} p.b." if delta > 0 else f"denná zmena {delta:.2f} p.b."
+    )
+    return (
+        f"Zásobníky plynu v EÚ sú aktuálne naplnené na {percent:.2f} %. "
+        f"{d}. Úroveň zásob pôsobí stabilizačne na prompt; krátkodobo rozhodnú počasie, "
+        f"prítoky LNG a prípadné neplánované odstávky."
+    )
+
+
+# Optional external generator (if present)
+try:
+    from .gpt import generate_comment as _generate_comment_inner  # type: ignore
+except Exception:
+    _generate_comment_inner = None  # type: ignore
+
+
+def generate_comment_safe(percent: float, delta: float | None) -> str:
+    """Generate a short comment; never returns empty (uses fallback if GPT fails)."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or _generate_comment_inner is None:
+        return _fallback_comment(percent, delta)
+    try:
+        txt = _generate_comment_inner(api_key, percent, delta)  # your original signature
+        if not txt or not str(txt).strip():
+            return _fallback_comment(percent, delta)
+        return str(txt).strip()
+    except Exception:
+        return _fallback_comment(percent, delta)
+
+
+# -----------------------------------------------------------------------------
+# HTML (minimal, with working IDs: rangeSel, btnCsv, btnXlsx)
+# -----------------------------------------------------------------------------
 INDEX_HTML = Template("""<!doctype html>
 <html lang="sk">
 <head>
@@ -37,86 +92,40 @@ INDEX_HTML = Template("""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Powergy Správy – Alfa</title>
 <style>
-  :root{--fg:#0b1221;--muted:#6b7280;--border:#e5e7eb;--blue:#2563eb;--blue-200:#9ec5fe;}
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;color:var(--fg)}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:24px}
-  .card{border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.04)}
-  h1{font-size:24px;margin-bottom:16px}
-  .muted{color:var(--muted)}
-  .section{margin-bottom:28px}
-  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
-  select,button{border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:#fff}
-  button{cursor:pointer}
-  .chart-wrap{position:relative;max-width:980px}
-  canvas{width:100%;height:340px;border:1px solid var(--border);border-radius:12px;background:#fff}
-  .legend{display:flex;gap:16px;align-items:center;margin:8px 0 6px 2px}
-  .chip{display:inline-flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
-  .chip .sw{width:20px;height:4px;border-radius:2px;display:inline-block}
-  .sw.blue{background:var(--blue)}
-  .sw.blue-dash{background:linear-gradient(90deg,var(--blue-200) 0 40%,transparent 0 60%)}
-  .tt{position:absolute;pointer-events:none;z-index:5;background:#111827;color:#fff;font-size:12px;border-radius:8px;padding:8px 10px;box-shadow:0 6px 18px rgba(0,0,0,.12);opacity:0;transition:opacity .08s}
-  .tt b{font-weight:700}
+ body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; color:#0b1221; }
+ .row { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+ .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin-bottom:24px; }
+ .card { border:1px solid #e5e7eb; border-radius:16px; padding:16px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+ h1 { font-size: 22px; margin: 0 0 8px; }
+ .muted { color:#6b7280; }
+ canvas { width: 100%; max-width: 980px; height: 320px; }
+ .section { margin-top: 16px; }
+ button, select { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; }
+ button:hover { background:#f9fafb; }
+ .toolbar { display:flex; gap:8px; align-items:center; }
 </style>
 </head>
 <body>
-  <h1>Powergy Správy – Alfa</h1>
-
-  <div class="cards" id="cards"></div>
-
-  <script>
-async function loadTop() {
-  const cards = document.getElementById("cards");
-  try {
-    const r = await fetch("/api/insight");
-    if (!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-
-    const delta = (j.latest.delta == null) ? "—" : (j.latest.delta > 0 ? `+${j.latest.delta.toFixed(2)} p.b.` : `${j.latest.delta.toFixed(2)} p.b.`);
-    const yoy  = (j.yoy_gap > 0 ? `+${j.yoy_gap.toFixed(2)} p.b.` : `${j.yoy_gap.toFixed(2)} p.b.`);
-    const t7   = (j.trend7 > 0 ? `+${j.trend7.toFixed(2)} p.b.` : `${j.trend7.toFixed(2)} p.b.`);
-
-    cards.innerHTML = `
-      <div class="card">
-        <div class="muted">Naplnenie zásobníkov (EÚ)</div>
-        <div style="font-size:28px; font-weight:700;">${j.latest.percent.toFixed(2)} %</div>
-        <div class="muted">Denná zmena: ${delta}</div>
-        <div class="muted" style="margin-top:8px;">YoY vs. 2024: <b>${yoy}</b>, 7-dňový trend: <b>${t7}</b></div>
-      </div>
-      <div class="card" style="grid-column: span 2;">
-        <div class="muted">Komentár</div>
-        <div>${j.comment}</div>
-      </div>
-    `;
-  } catch(e) {
-    cards.innerHTML = `<div class="muted">Komentár sa nepodarilo načítať.</div>`;
-  }
-}
-// zavolaj spolu s loadData()
-loadTop();
-</script>
-
-  <div class="section">
-    <div class="row">
-      <h2 style="margin:0;">Trend (2025 vs. 2024)</h2>
-      <label class="muted">Rozsah:</label>
+  <div class="row">
+    <h1>Powergy Správy – Alfa</h1>
+    <div class="toolbar">
       <select id="rangeSel">
-        <option value="30">30 dní</option>
+        <option value="30" selected>30 dní</option>
         <option value="90">90 dní</option>
         <option value="180">180 dní</option>
         <option value="365">365 dní</option>
       </select>
-      <span style="flex:1"></span>
       <button id="btnCsv">Export CSV</button>
       <button id="btnXlsx">Export Excel</button>
     </div>
-    <div class="legend">
-      <span class="chip"><span class="sw blue"></span>2025 (EÚ – naplnenie %)</span>
-      <span class="chip"><span class="sw blue-dash"></span>2024 (referencia)</span>
-    </div>
-    <div class="chart-wrap">
-      <canvas id="chart"></canvas>
-      <div id="tooltip" class="tt"></div>
-    </div>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="section">
+    <h3>Trend zásob (porovnanie s 2024)</h3>
+    <canvas id="chart"></canvas>
+    <div id="msg" class="muted"></div>
   </div>
 
   <div class="section">
@@ -126,39 +135,32 @@ loadTop();
 
 <script>
 (() => {
-  // UI prvky
-  const rangeEl = document.getElementById('rangeSel') || document.querySelector('select');
+  const rangeEl = document.getElementById('rangeSel');
   const chartEl = document.getElementById('chart');
   const tableEl = document.getElementById('table');
-  const btnCsv  = document.getElementById('btnCsv');
-  const btnXls  = document.getElementById('btnXlsx');
+  const cardsEl = document.getElementById('cards');
+  const btnCsv = document.getElementById('btnCsv');
+  const btnXls = document.getElementById('btnXlsx');
 
-  // stav + cache
   const cache = new Map();
-  let state = {
-    records: [],
-    prev: [],
-    hoverIdx: null,
-    scale: null   // uložíme si X/Y škále pre hover
-  };
+  let state = { records: [], prev: [], hoverIdx: null, scale: null };
 
-  function showMsg(text){
-    let m = document.getElementById('msg');
-    if(!m){
-      m = document.createElement('div');
-      m.id = 'msg';
-      m.className = 'muted';
-      chartEl.parentElement.appendChild(m);
-    }
-    m.textContent = text || '';
-  }
+  function showMsg(text){ document.getElementById('msg').textContent = text || ''; }
 
-  function drawEmpty(msg){
-    const g = chartEl.getContext('2d');
-    const W = chartEl.width, H = chartEl.height;
-    g.clearRect(0,0,W,H);
-    showMsg(msg || 'Žiadne záznamy pre zvolený rozsah.');
-    tableEl.innerHTML = '<div class="muted">Žiadne záznamy</div>';
+  function renderCards(today){
+    const delta = (today.delta == null) ? "—" : (today.delta > 0 ? `+${today.delta.toFixed(2)} p.b.` : `${today.delta.toFixed(2)} p.b.`);
+    cardsEl.innerHTML = `
+      <div class="card">
+        <div class="muted">Naplnenie zásobníkov (EÚ)</div>
+        <div style="font-size:28px; font-weight:700;">${today.percent.toFixed(2)} %</div>
+        <div class="muted">Dátum: ${today.date}</div>
+        <div class="muted">Denná zmena: ${delta}</div>
+      </div>
+      <div class="card" style="grid-column: span 2;">
+        <div class="muted">Komentár</div>
+        <div id="commentBox">${today.comment || '—'}</div>
+      </div>
+    `;
   }
 
   function renderTable(records){
@@ -189,7 +191,6 @@ loadTop();
   }
 
   function drawChart(records, prev, hoverIdx=null){
-    // HiDPI canvas
     const cssW = chartEl.clientWidth || 980;
     const cssH = 320;
     const dpi = window.devicePixelRatio || 1;
@@ -200,7 +201,6 @@ loadTop();
 
     const g = chartEl.getContext('2d');
     g.setTransform(dpi,0,0,dpi,0,0);
-
     const W = cssW, H = cssH;
     g.clearRect(0,0,W,H);
     showMsg('');
@@ -216,7 +216,6 @@ loadTop();
     const X = (i,n)=> left + i*((W-left-right)/Math.max(1,n-1));
     const Y = v => top + (H-top-bottom) * (1 - ((v-min)/Math.max(1,(max-min))));
 
-    // uložíme škálu pre hover
     state.scale = {left,right,top,bottom,W,H,min,max, nx, X:(i)=>X(i,nx), Y};
 
     function line(data, dashed, color){
@@ -234,70 +233,63 @@ loadTop();
       g.restore();
     }
 
-    // os X
     g.strokeStyle="#e5e7eb";
     g.beginPath(); g.moveTo(left,H-bottom); g.lineTo(W-right,H-bottom); g.stroke();
 
-    // referencia 2024
     if(ref.length) line(ref, true, "#9ec5fe");
-    // aktuálny rok
     line(cur, false, "#2563eb");
 
-  // hover bod + label (2025 + 2024)
-if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
-  const x = X(hoverIdx,nx);
-  const vCur = cur[hoverIdx];
-  const hasPrev = Array.isArray(ref) && ref.length === nx;   // zarovnané na rovnaké indexy
-  const vPrev = hasPrev ? ref[hoverIdx] : null;
+    if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
+      const x = X(hoverIdx,nx);
+      const vCur = cur[hoverIdx];
+      const hasPrev = Array.isArray(ref) && ref.length === nx;
+      const vPrev = hasPrev ? ref[hoverIdx] : null;
 
-  // vodiaca čiara
-  g.save();
-  g.strokeStyle = "rgba(0,0,0,.15)";
-  g.setLineDash([4,4]);
-  g.beginPath(); g.moveTo(x, top); g.lineTo(x, H-bottom); g.stroke();
-  g.restore();
+      g.save();
+      g.strokeStyle = "rgba(0,0,0,.15)";
+      g.setLineDash([4,4]);
+      g.beginPath(); g.moveTo(x, top); g.lineTo(x, H-bottom); g.stroke();
+      g.restore();
 
-  // body
-  // 2025
-  const yCur = Y(vCur);
-  g.fillStyle = "#2563eb";
-  g.beginPath(); g.arc(x,yCur,4,0,Math.PI*2); g.fill();
+      const yCur = Y(vCur);
+      g.fillStyle = "#2563eb";
+      g.beginPath(); g.arc(x,yCur,4,0,Math.PI*2); g.fill();
 
-  // 2024 (ak je)
-  if(vPrev!=null){
-    const yPrev = Y(vPrev);
-    g.fillStyle = "#9ec5fe";
-    g.beginPath(); g.arc(x,yPrev,4,0,Math.PI*2); g.fill();
+      if(vPrev!=null){
+        const yPrev = Y(vPrev);
+        g.fillStyle = "#9ec5fe";
+        g.beginPath(); g.arc(x,yPrev,4,0,Math.PI*2); g.fill();
+      }
+
+      const date = records[hoverIdx].date;
+      const line1 = `2025: ${vCur.toFixed(2)} %`;
+      const line2 = (vPrev!=null) ? `2024: ${vPrev.toFixed(2)} %` : '';
+      const pad = 6;
+      g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      const w1 = g.measureText(`${date}`).width;
+      const w2 = g.measureText(line1).width;
+      const w3 = g.measureText(line2).width;
+      const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
+      const lineH = 16;
+      const lines = (vPrev!=null) ? 3 : 2;
+      const boxH = lineH*lines + 6;
+      const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
+      const ly = Math.max(yCur - boxH - 10, top);
+      g.fillStyle = "rgba(11,18,33,0.90)";
+      g.fillRect(lx, ly, boxW, boxH);
+      g.fillStyle = "white";
+      let ty = ly + 14;
+      g.fillText(date, lx+pad, ty); ty += lineH;
+      g.fillText(line1, lx+pad, ty); ty += lineH;
+      if(vPrev!=null) g.fillText(line2, lx+pad, ty);
+    }
   }
 
-  // label (dvojriadkový)
-  const date = records[hoverIdx].date;
-  const line1 = `2025: ${vCur.toFixed(2)} %`;
-  const line2 = (vPrev!=null) ? `2024: ${vPrev.toFixed(2)} %` : '';
-  const pad = 6;
-  g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  const w1 = g.measureText(`${date}`).width;
-  const w2 = g.measureText(line1).width;
-  const w3 = g.measureText(line2).width;
-  const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
-  const lineH = 16; // výška riadku
-  const lines = (vPrev!=null) ? 3 : 2;
-  const boxH = lineH*lines + 6;
-
-  const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
-  const ly = Math.max(yCur - boxH - 10, top);
-
-  // podklad
-  g.fillStyle = "rgba(11,18,33,0.90)";
-  g.fillRect(lx, ly, boxW, boxH);
-
-  // texty
-  g.fillStyle = "white";
-  let ty = ly + 14;
-  g.fillText(date, lx+pad, ty); ty += lineH;
-  g.fillText(line1, lx+pad, ty); ty += lineH;
-  if(vPrev!=null) g.fillText(line2, lx+pad, ty);
-}
+  async function fetchToday(){
+    const r = await fetch('/api/today', {cache:'no-store'});
+    if(!r.ok){ cardsEl.innerHTML = '<div class="muted">Komentár sa nepodarilo načítať.</div>'; return; }
+    const j = await r.json();
+    renderCards(j);
   }
 
   async function fetchHistory(days){
@@ -312,15 +304,8 @@ if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
     }
     showMsg('Načítavam…');
     const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
-    if(!r.ok){
-      drawEmpty(`Nepodarilo sa načítať dáta: HTTP ${r.status}`);
-      return;
-    }
+    if(!r.ok){ showMsg(`HTTP ${r.status}`); return; }
     const data = await r.json();
-    if(!data || !Array.isArray(data.records) || data.records.length===0){
-      drawEmpty('Žiadne záznamy pre zvolený rozsah.');
-      return;
-    }
     cache.set(key, data);
     state.records = data.records;
     state.prev    = data.prev_year || [];
@@ -328,134 +313,142 @@ if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
     renderTable(state.records);
   }
 
-  function currentRange(){
-    const v = (rangeEl && rangeEl.value) ? Number(rangeEl.value) : 30;
-    return (v && !Number.isNaN(v)) ? v : 30;
-  }
-
-  // EXPORT – len presmerujeme na API s aktuálnym rozsahom
   function bindExport(){
     if(btnCsv){
-      btnCsv.addEventListener('click', () => {
-        const d = currentRange();
-        // ak máš iné endpointy (napr. /api/export-csv), zmeň URL tu
+      btnCsv.addEventListener('click', ()=>{
+        const d = Number(rangeEl.value || 30);
         window.location.href = `/api/export?fmt=csv&days=${encodeURIComponent(d)}`;
       });
     }
     if(btnXls){
-      btnXls.addEventListener('click', () => {
-        const d = currentRange();
+      btnXls.addEventListener('click', ()=>{
+        const d = Number(rangeEl.value || 30);
         window.location.href = `/api/export?fmt=xlsx&days=${encodeURIComponent(d)}`;
       });
     }
   }
 
-  // HOVER – jednoduchý nearest-point
   function bindHover(){
-    const onMove = (ev) => {
+    const onMove = (ev)=>{
       if(!state.scale || !state.records.length) return;
       const rect = chartEl.getBoundingClientRect();
-      const px = (ev.clientX - rect.left) * (chartEl.width / chartEl.clientWidth);   // fyz. pixely
+      const px = (ev.clientX - rect.left) * (chartEl.width / chartEl.clientWidth);
       const dpi = window.devicePixelRatio || 1;
-      const xCss = px / dpi; // späť do CSS súradníc
-
+      const xCss = px / dpi;
       const {left, right, W, nx} = state.scale;
-      if(xCss < left || xCss > (W - right)) {
-        state.hoverIdx = null;
-        drawChart(state.records, state.prev, state.hoverIdx);
-        return;
+      if(xCss < left || xCss > (W-right)){
+        state.hoverIdx = null; drawChart(state.records, state.prev, null); return;
       }
-      const usable = (W - left - right);
-      const t = (xCss - left) / Math.max(1, usable);     // 0..1
+      const usable = (W-left-right);
+      const t = (xCss - left) / Math.max(1, usable);
       const idx = Math.round(t * (nx - 1));
       state.hoverIdx = Math.max(0, Math.min(nx-1, idx));
       drawChart(state.records, state.prev, state.hoverIdx);
     };
-
     chartEl.addEventListener('mousemove', onMove);
-    chartEl.addEventListener('mouseleave', () => {
-      state.hoverIdx = null;
-      if(state.records.length) drawChart(state.records, state.prev, null);
-    });
+    chartEl.addEventListener('mouseleave', ()=>{ state.hoverIdx = null; drawChart(state.records, state.prev, null); });
   }
 
-  // init
-  if(rangeEl) rangeEl.addEventListener('change', () => fetchHistory(currentRange()));
-  window.addEventListener('load', ()=> {
-    bindExport();
-    bindHover();
-    fetchHistory(currentRange());
-  });
+  rangeEl.addEventListener('change', ()=> fetchHistory(Number(rangeEl.value || 30)));
+  bindExport(); bindHover();
+  fetchToday(); fetchHistory(Number(rangeEl.value || 30));
 })();
 </script>
 </body>
 </html>
 """)
 
+
+@app.on_event("startup")
+def _startup():
+    init_db()
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return INDEX_HTML.render()
 
-@app.get("/healthz", response_class=JSONResponse)
-def healthz():
-    return {"status": "ok"}
 
-@app.on_event("startup")
-def startup():
-    init_db()
+@app.get("/api/health", response_class=JSONUTF8Response)
+def api_health():
+    try:
+        sess = SessionLocal()
+        sess.execute(text("select 1"))
+        sess.close()
+        return {"ok": True}
+    except Exception as e:
+        return JSONUTF8Response({"ok": False, "detail": str(e)}, status_code=500)
 
-@app.get("/api/today", response_class=JSONResponse)
-def api_today():
+
+@app.get("/api/db-tables", response_class=JSONUTF8Response)
+def api_db_tables():
     sess = SessionLocal()
     try:
-        row = (
-            sess.query(GasStorageDaily)
-            .order_by(GasStorageDaily.date.desc())
-            .first()
-        )
-        if not row:
-            return JSONResponse({"message": "No data yet"}, status_code=404)
-
-        # doplniť komentár ak chýba (bezpečne + fallback)
-        comment_out = (row.comment or "").strip()
-        if not comment_out:
-            try:
-                comment_out = generate_comment_safe(
-                    float(row.percent),
-                    None if row.delta is None else float(row.delta),
-                )
-                row.comment = comment_out
-                sess.commit()
-            except Exception:
-                sess.rollback()  # nevadí – aspoň ho vrátime v odpovedi
-
-        # !!! DÔLEŽITÉ: konverzia na float kvôli orjson (žiadne Decimal v odpovedi)
-        out = {
-            "date": str(row.date),
-            "percent": float(row.percent),
-            "delta": None if row.delta is None else float(row.delta),
-            "comment": comment_out,
-        }
-        return out
-
-    except SQLAlchemyError as e:
-        sess.rollback()
-        # vrátime čitateľnú chybu namiesto „Internal Server Error“
-        return JSONResponse(
-            {"ok": False, "error": "db_error", "detail": str(e)},
-            status_code=500,
-        )
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "error": "today_failed", "detail": repr(e)},
-            status_code=500,
-        )
+        insp = inspect(sess.bind)
+        return {"ok": True, "tables": insp.get_table_names()}
     finally:
         sess.close()
 
-@app.get("/api/history", response_class=JSONResponse)
+
+@app.get("/api/db-stats", response_class=JSONUTF8Response)
+def api_db_stats():
+    sess = SessionLocal()
+    try:
+        total = sess.query(func.count(GasStorageDaily.id)).scalar() or 0
+        last = sess.query(GasStorageDaily.date, GasStorageDaily.percent)\
+                   .order_by(GasStorageDaily.date.desc()).first()
+        return {
+            "ok": True,
+            "rows": int(total),
+            "last_date": (str(last[0]) if last else None),
+            "last_percent": (float(last[1]) if last else None),
+        }
+    except Exception as e:
+        return JSONUTF8Response({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+
+@app.get("/api/today", response_class=JSONUTF8Response)
+def api_today():
+    sess = SessionLocal()
+    try:
+        row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        if not row:
+            return JSONUTF8Response({"message": "No data yet"}, status_code=404)
+
+        percent = float(row.percent)
+        delta   = None if row.delta is None else float(row.delta)
+
+        # ensure comment exists
+        if not row.comment or not str(row.comment).strip():
+            try:
+                comment_new = generate_comment_safe(percent, delta)
+                row.comment = comment_new
+                sess.commit()
+            except Exception:
+                sess.rollback()
+
+        comment_out = fix_mojibake(row.comment or "")
+
+        return {
+            "date": str(row.date),
+            "percent": percent,
+            "delta": delta,
+            "comment": comment_out,
+        }
+
+    except SQLAlchemyError as e:
+        sess.rollback()
+        return JSONUTF8Response({"ok": False, "error": "db_error", "detail": str(e)}, status_code=500)
+    except Exception as e:
+        return JSONUTF8Response({"ok": False, "error": "today_failed", "detail": repr(e)}, status_code=500)
+    finally:
+        sess.close()
+
+
+@app.get("/api/history", response_class=JSONUTF8Response)
 def api_history(days: int = 30):
-    # zdravé limity
     try:
         days = int(days)
     except Exception:
@@ -465,29 +458,21 @@ def api_history(days: int = 30):
 
     sess = SessionLocal()
     try:
-        # posledných N dní (ASC, aby graf kreslil zľava doprava)
-        q = (
-            sess.query(GasStorageDaily)
-            .order_by(GasStorageDaily.date.desc())
-            .limit(days)
-        )
+        q = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(days)
         rows = list(reversed(q.all()))
 
-        # keď nemáme nič, vráť prázdne polia (200 OK – UI to zvládne)
         if not rows:
-            resp = JSONResponse({"records": [], "prev_year": []})
+            resp = JSONUTF8Response({"records": [], "prev_year": []})
             resp.headers["Cache-Control"] = "public, max-age=30"
             return resp
 
-        records = []
-        for r in rows:
-            records.append({
-                "date": str(r.date),
-                "percent": round(float(r.percent), 2),
-                "delta": None if r.delta is None else round(float(r.delta), 2),
-            })
+        records = [{
+            "date": str(r.date),
+            "percent": round(float(r.percent), 2),
+            "delta": None if r.delta is None else round(float(r.delta), 2),
+        } for r in rows]
 
-        # okno pre minulý rok – batch query (žiadne per-row dotazy)
+        from datetime import timedelta as TD
         start_prev = rows[0].date - TD(days=365)
         end_prev   = rows[-1].date - TD(days=365)
 
@@ -499,208 +484,25 @@ def api_history(days: int = 30):
         )
         by_date = {p.date: p for p in prev_rows}
 
-        baseline = records[0]["percent"]  # fallback, aby graf nikdy nespadol
+        baseline = records[0]["percent"]
         prev_year = []
         for r in rows:
             key = r.date - TD(days=365)
             pr = by_date.get(key)
             if pr:
-                prev_year.append({"date": str(pr.date),
-                                  "percent": round(float(pr.percent), 2)})
+                prev_year.append({"date": str(pr.date), "percent": round(float(pr.percent), 2)})
             else:
-                # keď AGSI/DB nemá presný „-365 dní“, daj baseline
                 prev_year.append({"date": str(key), "percent": baseline})
 
-        resp = JSONResponse({"records": records, "prev_year": prev_year})
-        resp.headers["Cache-Control"] = "public, max-age=30"  # krátka cache
+        resp = JSONUTF8Response({"records": records, "prev_year": prev_year})
+        resp.headers["Cache-Control"] = "public, max-age=30"
         return resp
 
     except Exception as e:
-        # vrátime info, aby UI/logy ukázali konkrétne, čo sa stalo
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    finally:
-        sess.close()
-      
-@app.get("/api/export.csv")
-def api_export_csv(days: int = 30):
-    buff = io.StringIO()
-    writer = csv.writer(buff)
-    writer.writerow(["date", "percent", "delta", "comment"])
-    for row in _history_rows(days):
-        writer.writerow(row)
-    buff.seek(0)
-    return StreamingResponse(
-        buff,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.csv"'}
-    )
-
-
-@app.get("/api/export.xlsx")
-def api_export_xlsx(days: int = 30):
-    # import lokálne (ak nechceš globálny import openpyxl)
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Data"
-    ws.append(["date", "percent", "delta", "comment"])
-    for row in _history_rows(days):
-        ws.append(row)
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return StreamingResponse(
-        out,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="powergy_{days}d.xlsx"'}
-    )
-    # minulý rok – posun o 365 dní (proxy) + ošetrenie 29.2.
-    prev_rows = []
-    for r in rows:
-        try:
-            prev_date = r.date.replace(year=r.date.year-1)
-        except ValueError:
-            prev_date = r.date - timedelta(days=365)
-        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date==prev_date).first()
-        if prev:
-            prev_rows.append({"date": str(prev.date), "percent": prev.percent})
-        else:
-            prev_rows.append({"date": str(prev_date), "percent": records[0]["percent"] if records else 0})
-
-    sess.close()
-    return {"records": records, "prev_year": prev_rows}
-
-# manuálny trigger – prvé naplnenie dát (POST)
-@app.post("/api/run-daily", response_class=JSONResponse)
-def api_run_daily():
-    try:
-        from .scraper import run_daily
-        run_daily()
-        return {"ok": True}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-# pohodlný GET spúšťač scraperu (klik z prehliadača)
-@app.get("/api/run-now", response_class=JSONResponse)
-def api_run_now_get():
-    try:
-        from .scraper import run_daily
-        run_daily()
-        return {"ok": True}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-# Backfill z AGSI – GET napr. /api/backfill-agsi?from=2025-01-01
-@app.get("/api/backfill-agsi", response_class=JSONResponse)
-def api_backfill_agsi(from_: str = Query("2025-01-01", alias="from")):
-    try:
-        from .scraper import backfill_agsi
-        res = backfill_agsi(from_)
-        return {"ok": True, **res}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-# Diagnostika AGSI API – kontrola, čo sa vracia
-@app.get("/api/agsi-probe", response_class=JSONResponse)
-def api_agsi_probe(from_: str = Query("2025-01-01", alias="from")):
-    import os
-    import requests
-    import datetime as dt
-
-    key = os.getenv("AGSI_API_KEY", "")
-    if not key:
-        return JSONResponse({"ok": False, "error": "Missing AGSI_API_KEY"}, status_code=400)
-
-    url = "https://agsi.gie.eu/api"
- 
-    params = {
-    "type": "eu",
-    "from": from_,
-    "to": dt.date.today().isoformat(),
-    "size": 5000,
-    "gas_day": "asc",
-    "page": 1,
-}
-    r = requests.get(url, params=params, headers={"x-key": key}, timeout=60)
-
-    try:
-        j = r.json()
-    except Exception:
-        j = {}
-
-    return {
-        "ok": r.ok,
-        "status": r.status_code,
-        "request_url": r.url,
-        "json_keys": list(j.keys()) if isinstance(j, dict) else None,
-        "total": (j.get("total") if isinstance(j, dict) else None),
-        "last_page": (j.get("last_page") if isinstance(j, dict) else None),
-        "count": (len(j.get("data", [])) if isinstance(j, dict) and isinstance(j.get("data", []), list) else None),
-        "sample": (j.get("data") or [])[:3] if isinstance(j, dict) else None,
-    }
-
-# (voliteľné) spätný prepočet dennej zmeny po importe
-@app.post("/api/recompute-deltas", response_class=JSONResponse)
-def api_recompute_deltas():
-    sess = SessionLocal()
-    try:
-        rows = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.asc()).all()
-        prev = None
-        for r in rows:
-            if prev is None:
-                r.delta = None
-            else:
-                r.delta = round(r.percent - prev.percent, 2)
-            prev = r
-        sess.commit()
-        return {"ok": True, "count": len(rows)}
-    except Exception as e:
-        sess.rollback()
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
 
-@app.get("/api/health")
-def api_health():
-    return {"ok": True}
-
-@app.get("/api/db-stats", response_class=JSONResponse)
-def api_db_stats():
-    sess = SessionLocal()
-    try:
-        total = sess.query(func.count(GasStorageDaily.id)).scalar() or 0
-        last = (
-            sess.query(GasStorageDaily.date, GasStorageDaily.percent)  # ← len tieto stĺpce
-            .order_by(GasStorageDaily.date.desc())
-            .first()
-        )
-        return {
-            "ok": True,
-            "rows": int(total),
-            "last_date": (str(last[0]) if last else None),
-            "last_percent": (float(last[1]) if last and last[1] is not None else None),
-        }
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": "exception", "detail": str(e)}, status_code=500)
-    finally:
-        sess.close()
-
-@app.get("/api/db-tables", response_class=JSONResponse)
-def api_db_tables():
-    # Pre istotu vypíšeme tabuľky, ktoré SQLAlchemy vidí
-    insp = inspect(SessionLocal().get_bind())
-    return {"ok": True, "tables": insp.get_table_names(schema="public")}
-
-@app.post("/api/init-db", response_class=JSONResponse)
-def api_init_db():
-    # nútene spustí create_all (ak by neprebehlo pri startupe)
-    try:
-        init_db()
-        return {"ok": True}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.get("/api/export", response_class=StreamingResponse)
 def api_export(fmt: str = "csv", days: int = 30):
@@ -717,24 +519,43 @@ def api_export(fmt: str = "csv", days: int = 30):
         if fmt.lower() == "csv":
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow(["date", "percent", "delta"])
+            w.writerow(["date", "percent", "delta", "comment"])
             for r in rows:
-                w.writerow([str(r.date), f"{r.percent:.2f}", "" if r.delta is None else f"{r.delta:.2f}"])
+                w.writerow([str(r.date),
+                            f"{float(r.percent):.2f}",
+                            "" if r.delta is None else f"{float(r.delta):.2f}",
+                            (r.comment or "").replace("\n"," ").strip()])
             buf.seek(0)
             return StreamingResponse(
                 iter([buf.getvalue()]),
-                media_type="text/csv",
+                media_type="text/csv; charset=utf-8",
                 headers={"Content-Disposition": 'attachment; filename="powergy_gas_storage.csv"'}
             )
         elif fmt.lower() in ("xlsx", "xls"):
             if openpyxl is None:
-                return JSONResponse({"ok": False, "error": "Excel export nie je povolený (chýba openpyxl)."}, status_code=400)
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(["date", "percent", "delta", "comment"])
+                for r in rows:
+                    w.writerow([str(r.date),
+                                f"{float(r.percent):.2f}",
+                                "" if r.delta is None else f"{float(r.delta):.2f}",
+                                (r.comment or "").replace("\n"," ").strip()])
+                buf.seek(0)
+                return StreamingResponse(
+                    iter([buf.getvalue()]),
+                    media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="powergy_gas_storage.csv"'}
+                )
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "gas_storage"
-            ws.append(["date", "percent", "delta"])
+            ws.append(["date", "percent", "delta", "comment"])
             for r in rows:
-                ws.append([str(r.date), float(f"{r.percent:.2f}"), None if r.delta is None else float(f"{r.delta:.2f}")])
+                ws.append([str(r.date),
+                           float(f"{float(r.percent):.2f}"),
+                           None if r.delta is None else float(f"{float(r.delta):.2f}"),
+                           (r.comment or "").strip()])
             xbuf = io.BytesIO()
             wb.save(xbuf)
             xbuf.seek(0)
@@ -744,95 +565,56 @@ def api_export(fmt: str = "csv", days: int = 30):
                 headers={"Content-Disposition": 'attachment; filename="powergy_gas_storage.xlsx"'}
             )
         else:
-            return JSONResponse({"ok": False, "error": "Unknown format"}, status_code=400)
-    finally:
-        sess.close()
+            return JSONUTF8Response({"ok": False, "error": "Unknown format"}, status_code=400)
 
-@app.get("/api/insight", response_class=JSONResponse)
-def api_insight(days: int = 30):
-    """
-    Vráti metriku pre dashboard: latest, 7d trend, yoy gap + komentár (GPT s fallbackom).
-    """
-    sess = SessionLocal()
-    try:
-        # posledný záznam
-        last = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-        if not last:
-            return JSONResponse({"ok": False, "error": "No data"}, status_code=404)
-
-        # 7-dňový trend (rozdiel percent medzi posledným a hodnotou spred 7 dní)
-        seven_ago = sess.query(GasStorageDaily)\
-            .filter(GasStorageDaily.date <= last.date - timedelta(days=7))\
-            .order_by(GasStorageDaily.date.desc()).first()
-        trend7 = (last.percent - seven_ago.percent) if seven_ago else 0.0
-
-        # YoY gap – pokus o dátum -1 rok (s ošetrením 29.2.)
-        try:
-            prev_date = last.date.replace(year=last.date.year - 1)
-        except ValueError:
-            prev_date = last.date - timedelta(days=365)
-        prev_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
-        yoy_gap = last.percent - (prev_row.percent if prev_row else last.percent)
-
-        # komentár (GPT / fallback)
-        comment = generate_comment(last.percent, last.delta, trend7, yoy_gap)
-
-        return {
-            "ok": True,
-            "latest": {
-                "date": str(last.date),
-                "percent": last.percent,
-                "delta": last.delta,
-            },
-            "trend7": trend7,
-            "yoy_gap": yoy_gap,
-            "comment": comment,
-        }
     finally:
         sess.close()
 
 
-
-# --- Diagnostika GPT kľúča
-@app.get("/api/gpt-status", response_class=JSONResponse)
-def api_gpt_status():
-    try:
-        # iba overíme, či je dostupný import a kľúč
-        from .settings import OPENAI_API_KEY
-        if not OPENAI_API_KEY:
-            return {"ok": False, "status": "missing_key"}
-        # nevoláme API, len vrátime že kľúč je prítomný
-        return {"ok": True, "status": "key_present"}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-# --- Hromadné dopočítanie komentárov spätne
-@app.post("/api/backfill-comments", response_class=JSONResponse)
-def api_backfill_comments(limit: int = 60, force: bool = False):
+@app.post("/api/backfill-comments", response_class=JSONUTF8Response)
+def backfill_comments(limit: int = 60, force: bool = False):
+    """Fill missing comments for last N rows; if force=True, overwrite all."""
     sess = SessionLocal()
     try:
-        rows = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(limit).all()
-        done = 0
+        rows = (sess.query(GasStorageDaily)
+                    .order_by(GasStorageDaily.date.desc())
+                    .limit(limit).all())
+        changed = 0
         for r in rows:
-            if force or not r.comment:
-                try:
-                    delta = r.delta
-                    current = r.percent
-                    c = generate_comment(current, delta)
-                except Exception:
-                    if r.delta is None:
-                        c = f"Zásobníky EÚ sú naplnené na {r.percent:.2f} %."
-                    else:
-                        smer = "vyššia" if r.delta>0 else ("nižšia" if r.delta<0 else "nezmenená")
-                        c = f"Aktuálne naplnenie je {r.percent:.2f} %, denná zmena {r.delta:.2f} % ({smer})."
-                r.comment = c
-                done += 1
+            if force or not r.comment or not str(r.comment).strip():
+                r.comment = generate_comment_safe(float(r.percent),
+                                                  None if r.delta is None else float(r.delta))
+                changed += 1
         sess.commit()
-        return {"ok": True, "updated": done}
+        return {"ok": True, "updated": changed}
     except Exception as e:
         sess.rollback()
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
 
+
+@app.get("/api/gpt-status", response_class=JSONUTF8Response)
+def gpt_status():
+    return {"ok": True, "has_key": bool(os.getenv("OPENAI_API_KEY"))}
+
+
+@app.post("/api/recompute-deltas", response_class=JSONUTF8Response)
+def api_recompute_deltas():
+    sess = SessionLocal()
+    try:
+        rows = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.asc()).all()
+        prev = None
+        for r in rows:
+            if prev is None:
+                r.delta = None
+            else:
+                r.delta = round(float(r.percent) - float(prev.percent), 2)
+            prev = r
+        sess.commit()
+        return {"ok": True, "count": len(rows)}
+    except Exception as e:
+        sess.rollback()
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
