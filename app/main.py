@@ -56,6 +56,38 @@ INDEX_HTML = Template("""<!doctype html>
 
   <div class="cards" id="cards"></div>
 
+  <script>
+async function loadTop() {
+  const cards = document.getElementById("cards");
+  try {
+    const r = await fetch("/api/insight");
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+
+    const delta = (j.latest.delta == null) ? "—" : (j.latest.delta > 0 ? `+${j.latest.delta.toFixed(2)} p.b.` : `${j.latest.delta.toFixed(2)} p.b.`);
+    const yoy  = (j.yoy_gap > 0 ? `+${j.yoy_gap.toFixed(2)} p.b.` : `${j.yoy_gap.toFixed(2)} p.b.`);
+    const t7   = (j.trend7 > 0 ? `+${j.trend7.toFixed(2)} p.b.` : `${j.trend7.toFixed(2)} p.b.`);
+
+    cards.innerHTML = `
+      <div class="card">
+        <div class="muted">Naplnenie zásobníkov (EÚ)</div>
+        <div style="font-size:28px; font-weight:700;">${j.latest.percent.toFixed(2)} %</div>
+        <div class="muted">Denná zmena: ${delta}</div>
+        <div class="muted" style="margin-top:8px;">YoY vs. 2024: <b>${yoy}</b>, 7-dňový trend: <b>${t7}</b></div>
+      </div>
+      <div class="card" style="grid-column: span 2;">
+        <div class="muted">Komentár</div>
+        <div>${j.comment}</div>
+      </div>
+    `;
+  } catch(e) {
+    cards.innerHTML = `<div class="muted">Komentár sa nepodarilo načítať.</div>`;
+  }
+}
+// zavolaj spolu s loadData()
+loadTop();
+</script>
+
   <div class="section">
     <div class="row">
       <h2 style="margin:0;">Trend (2025 vs. 2024)</h2>
