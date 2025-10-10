@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
 from sqlalchemy import desc, func, text, inspect
+from sqlalchemy.exc import SQLAlchemyError
 from .gpt import generate_comment
 from datetime import date as D, timedelta as TD
 from jinja2 import Template
@@ -406,31 +407,51 @@ def startup():
 @app.get("/api/today", response_class=JSONResponse)
 def api_today():
     sess = SessionLocal()
-    row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-    if not row:
-        sess.close()
-        return JSONResponse({"message":"No data yet"}, status_code=404)
-
-    # rýchly prepočet 7d + yoy pre komentár
-    seven_ago = sess.query(GasStorageDaily)\
-        .filter(GasStorageDaily.date <= row.date - timedelta(days=7))\
-        .order_by(GasStorageDaily.date.desc()).first()
-    trend7 = (row.percent - seven_ago.percent) if seven_ago else 0.0
     try:
-        prev_date = row.date.replace(year=row.date.year-1)
-    except ValueError:
-        prev_date = row.date - timedelta(days=365)
-    prev_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date==prev_date).first()
-    yoy_gap = row.percent - (prev_row.percent if prev_row else row.percent)
+        row = (
+            sess.query(GasStorageDaily)
+            .order_by(GasStorageDaily.date.desc())
+            .first()
+        )
+        if not row:
+            return JSONResponse({"message": "No data yet"}, status_code=404)
 
-    out = {
-        "date": str(row.date),
-        "percent": row.percent,
-        "delta": row.delta,
-        "comment": generate_comment(row.percent, row.delta, trend7, yoy_gap),
-    }
-    sess.close()
-    return out
+        # doplniť komentár ak chýba (bezpečne + fallback)
+        comment_out = (row.comment or "").strip()
+        if not comment_out:
+            try:
+                comment_out = generate_comment_safe(
+                    float(row.percent),
+                    None if row.delta is None else float(row.delta),
+                )
+                row.comment = comment_out
+                sess.commit()
+            except Exception:
+                sess.rollback()  # nevadí – aspoň ho vrátime v odpovedi
+
+        # !!! DÔLEŽITÉ: konverzia na float kvôli orjson (žiadne Decimal v odpovedi)
+        out = {
+            "date": str(row.date),
+            "percent": float(row.percent),
+            "delta": None if row.delta is None else float(row.delta),
+            "comment": comment_out,
+        }
+        return out
+
+    except SQLAlchemyError as e:
+        sess.rollback()
+        # vrátime čitateľnú chybu namiesto „Internal Server Error“
+        return JSONResponse(
+            {"ok": False, "error": "db_error", "detail": str(e)},
+            status_code=500,
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "error": "today_failed", "detail": repr(e)},
+            status_code=500,
+        )
+    finally:
+        sess.close()
 
 @app.get("/api/history", response_class=JSONResponse)
 def api_history(days: int = 30):
