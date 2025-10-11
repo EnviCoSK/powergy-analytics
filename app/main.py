@@ -632,17 +632,36 @@ def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM
 # --- refresh komentára pre najnovší deň ---
 @app.post("/api/refresh-comment", response_class=ORJSONResponse)
 def api_refresh_comment():
+    """
+    Vygeneruje a uloží komentár pre najnovší záznam.
+    Spočíta yoy_gap (rozdiel vs. min. rok) ak je dostupný.
+    """
     import os
+    import datetime as dt
     from .gpt import generate_comment
+
     sess = SessionLocal()
     try:
         row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
         if not row:
             return ORJSONResponse({"ok": False, "error": "No rows"}, status_code=400)
-        key = os.environ.get("OPENAI_API_KEY", "")
-        row.comment = generate_comment(key, row.percent, row.delta)
+
+        # nájdeme medziročný ekvivalent
+        d = row.date
+        try:
+            prev_date = d.replace(year=d.year - 1)
+        except ValueError:
+            prev_date = d - dt.timedelta(days=365)
+
+        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
+        yoy_gap = None
+        if prev:
+            yoy_gap = round((row.percent - prev.percent), 2)
+
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        row.comment = generate_comment(api_key, row.percent, row.delta, yoy_gap)
         sess.commit()
-        return {"ok": True, "date": str(row.date), "percent": row.percent}
+        return {"ok": True, "date": str(row.date), "percent": row.percent, "yoy_gap": yoy_gap}
     except Exception as e:
         sess.rollback()
         return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
