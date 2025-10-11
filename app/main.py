@@ -8,7 +8,7 @@ from datetime import timedelta, date as _date
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
 from jinja2 import Template
 from sqlalchemy import func, text, inspect
 from sqlalchemy.exc import SQLAlchemyError
