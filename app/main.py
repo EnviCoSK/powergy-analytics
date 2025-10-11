@@ -618,3 +618,33 @@ def api_recompute_deltas():
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
+
+# --- AGSI backfill od dátumu ---
+@app.post("/api/backfill-agsi", response_class=ORJSONResponse)
+def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM-DD")):
+    try:
+        from .scraper import backfill_agsi
+        res = backfill_agsi(from_)
+        return {"ok": True, **res}
+    except Exception as e:
+        return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+# --- refresh komentára pre najnovší deň ---
+@app.post("/api/refresh-comment", response_class=ORJSONResponse)
+def api_refresh_comment():
+    import os
+    from .gpt import generate_comment
+    sess = SessionLocal()
+    try:
+        row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        if not row:
+            return ORJSONResponse({"ok": False, "error": "No rows"}, status_code=400)
+        key = os.environ.get("OPENAI_API_KEY", "")
+        row.comment = generate_comment(key, row.percent, row.delta)
+        sess.commit()
+        return {"ok": True, "date": str(row.date), "percent": row.percent}
+    except Exception as e:
+        sess.rollback()
+        return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
