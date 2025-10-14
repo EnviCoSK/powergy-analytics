@@ -619,6 +619,32 @@ def api_recompute_deltas():
     finally:
         sess.close()
 
+def _recompute_last_n_days(sess, n: int = 10) -> int:
+    # spočítame posledných n+1 dní, aby sme vedeli vypočítať deltu pre prvý z N dní
+    rows = (
+        sess.query(GasStorageDaily)
+        .order_by(GasStorageDaily.date.desc())
+        .limit(n + 1)
+        .all()
+    )
+    rows = list(reversed(rows))
+    prev = None
+    changed = 0
+    for r in rows:
+        if prev is None:
+            new_delta = None
+        else:
+            if r.percent is not None and prev.percent is not None:
+                new_delta = round(float(r.percent) - float(prev.percent), 2)
+            else:
+                new_delta = None
+        if r.delta != new_delta:
+            r.delta = new_delta
+            changed += 1
+        prev = r
+    sess.commit()
+    return changed
+
 # --- AGSI backfill od dátumu ---
 @app.api_route("/api/backfill-agsi", methods=["GET", "POST"], response_class=ORJSONResponse)
 def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM-DD")):
@@ -673,5 +699,44 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
     except Exception as e:
         sess.rollback()
         return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+@app.post("/api/recompute-deltas")
+@app.get("/api/recompute-deltas")
+def api_recompute_deltas(days: int | None = None):
+    """
+    GET/POST /api/recompute-deltas
+    - bez parametra: plný prepočet cez SQL window funkciu (rýchle)
+    - ?days=N: prepočíta len posledných N dní (pythonom)
+    """
+    sess = SessionLocal()
+    try:
+        if days and days > 0:
+            changed = _recompute_last_n_days(sess, days)
+            return {"ok": True, "mode": f"last_{days}_days", "changed": changed}
+
+        # full recompute – SQL window (najrýchlejšie a presné)
+        sql = text("""
+            WITH lagged AS (
+              SELECT date,
+                     LAG(percent) OVER (ORDER BY date) AS lag_percent
+              FROM gas_storage_daily
+            )
+            UPDATE gas_storage_daily g
+               SET delta = CASE
+                             WHEN l.lag_percent IS NULL THEN NULL
+                             ELSE ROUND(g.percent - l.lag_percent, 2)
+                           END
+              FROM lagged l
+             WHERE l.date = g.date
+        """)
+        res = sess.execute(sql)
+        sess.commit()
+        # rowcount môže byť -1 pri niektorých PG verziách; ber to skôr informačne
+        return {"ok": True, "mode": "full", "rowcount": getattr(res, "rowcount", None)}
+    except Exception as e:
+        sess.rollback()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
