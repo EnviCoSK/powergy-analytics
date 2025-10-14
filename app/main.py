@@ -706,16 +706,32 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
 @app.get("/api/recompute-deltas")
 def api_recompute_deltas(days: int | None = None):
     """
-    Prepočet dennej zmeny zásob (delta)
-    - POST /api/recompute-deltas  → plný prepočet
-    - POST /api/recompute-deltas?days=10  → len posledných 10 dní
+    Prepočíta denné zmeny (delta) v tabuľke gas_storage_daily.
+    - Bez parametru -> prepočet celej tabuľky
+    - ?days=N      -> prepočet iba za posledných N dní (+ predchádzajúci deň ako lag)
     """
     sess = SessionLocal()
     try:
-        if days and days > 0:
+        # normalizácia/validácia
+        mode = "full"
+        params: dict[str, int] = {}
+        if days is not None:
+            try:
+                days = int(days)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "days must be integer"}, status_code=400)
+            if days <= 0:
+                return JSONResponse({"ok": False, "error": "days must be > 0"}, status_code=400)
+            # rozumné maximum, nechtiac si neodpáliš celé
+            days = min(days, 365*5)
+            mode = f"last_{days}_days"
+            params = {"days": days}
+
+        if mode != "full":
+            # inkrementálny prepočet (make_interval)
             sql = text("""
                 WITH bounds AS (
-                  SELECT (MAX(date) - INTERVAL :days || ' days')::date AS since
+                  SELECT (MAX(date) - make_interval(days => :days))::date AS since
                   FROM gas_storage_daily
                 ),
                 lagged AS (
@@ -733,10 +749,11 @@ def api_recompute_deltas(days: int | None = None):
                  WHERE l.date = g.date
                    AND g.date >= (SELECT since FROM bounds)
             """)
-            res = sess.execute(sql, {"days": days})
+            res = sess.execute(sql, params)
             sess.commit()
-            return {"ok": True, "mode": f"last_{days}_days", "count": getattr(res, "rowcount", 0)}
+            return {"ok": True, "mode": mode, "changed": getattr(res, "rowcount", 0)}
         else:
+            # full prepočet
             sql = text("""
                 WITH lagged AS (
                   SELECT date,
@@ -753,7 +770,8 @@ def api_recompute_deltas(days: int | None = None):
             """)
             res = sess.execute(sql)
             sess.commit()
-            return {"ok": True, "mode": "full", "count": getattr(res, "rowcount", 0)}
+            return {"ok": True, "mode": "full", "changed": getattr(res, "rowcount", 0)}
+
     except Exception as e:
         sess.rollback()
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
