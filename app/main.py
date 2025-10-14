@@ -620,8 +620,11 @@ def api_recompute_deltas():
         sess.close()
 
 # --- AGSI backfill od dátumu ---
-@app.post("/api/backfill-agsi", response_class=ORJSONResponse)
+@app.api_route("/api/backfill-agsi", methods=["GET", "POST"], response_class=ORJSONResponse)
 def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM-DD")):
+    """
+    Dotiahne historické dáta z AGSI od dátumu `from` po dnes.
+    """
     try:
         from .scraper import backfill_agsi
         res = backfill_agsi(from_)
@@ -631,37 +634,42 @@ def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM
 
 # --- refresh komentára pre najnovší deň ---
 @app.post("/api/refresh-comment", response_class=ORJSONResponse)
-def api_refresh_comment():
+@app.api_route("/api/refresh-comment", methods=["GET", "POST"], response_class=ORJSONResponse)
+def api_refresh_comment(force: bool = Query(False, description="Ak true, prepíše existujúci komentár")):
     """
-    Vygeneruje a uloží komentár pre najnovší záznam.
-    Spočíta yoy_gap (rozdiel vs. min. rok) ak je dostupný.
+    Vygeneruje a uloží komentár pre najnovší záznam:
+    - počíta yoy_gap (rozdiel vs. minuloročný dátum),
+    - ak komentár existuje a force=false → neregeneruje (šetrenie tokenov).
     """
     import os
-    import datetime as dt
-    from .gpt import generate_comment
+    from .gpt import generate_comment  # má signatúru (api_key, current, delta, yoy_gap)
 
     sess = SessionLocal()
     try:
         row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
         if not row:
-            return ORJSONResponse({"ok": False, "error": "No rows"}, status_code=400)
+            return ORJSONResponse({"ok": False, "error": "No rows"}, status_code=404)
 
-        # nájdeme medziročný ekvivalent
+        if row.comment and not force:
+            # už existuje → neplytváme tokenmi
+            return {"ok": True, "skipped": True, "date": str(row.date)}
+
+        # vypočítaj yoy_gap (rozdiel voči predchádzajúcemu roku)
         d = row.date
         try:
             prev_date = d.replace(year=d.year - 1)
         except ValueError:
-            prev_date = d - dt.timedelta(days=365)
+            from datetime import timedelta
+            prev_date = d - timedelta(days=365)
 
         prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
-        yoy_gap = None
-        if prev:
-            yoy_gap = round((row.percent - prev.percent), 2)
+        yoy_gap = round(row.percent - prev.percent, 2) if prev else None
 
         api_key = os.environ.get("OPENAI_API_KEY", "")
+        # ak OpenAI padne, doplň si v generate_comment fallback alebo tu obal try/except
         row.comment = generate_comment(api_key, row.percent, row.delta, yoy_gap)
         sess.commit()
-        return {"ok": True, "date": str(row.date), "percent": row.percent, "yoy_gap": yoy_gap}
+        return {"ok": True, "date": str(row.date), "percent": float(row.percent), "yoy_gap": yoy_gap}
     except Exception as e:
         sess.rollback()
         return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
