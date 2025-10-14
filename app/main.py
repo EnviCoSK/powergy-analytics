@@ -704,47 +704,58 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
 
 @app.post("/api/recompute-deltas")
 @app.get("/api/recompute-deltas")
-from sqlalchemy import text
-
-def recompute_deltas_sql(sess, days: int | None = None):
-    if days is None:
-        # FULL RE-CALC
-        sql = text("""
-            WITH lagged AS (
-              SELECT date,
-                     LAG(percent) OVER (ORDER BY date) AS lag_percent
-              FROM gas_storage_daily
-            )
-            UPDATE gas_storage_daily g
-               SET delta = CASE
-                             WHEN l.lag_percent IS NULL THEN NULL
-                             ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
-                           END
-              FROM lagged l
-             WHERE l.date = g.date
-        """)
-    else:
-        # RECENT N-DAY RE-CALC (zohľadní aj včerajšok kvôli LAG)
-        sql = text("""
-            WITH bounds AS (
-              SELECT (MAX(date) - INTERVAL :days || ' days')::date AS since
-              FROM gas_storage_daily
-            ),
-            lagged AS (
-              SELECT g.date,
-                     LAG(g.percent) OVER (ORDER BY g.date) AS lag_percent
-              FROM gas_storage_daily g
-              JOIN bounds b ON g.date >= (b.since - INTERVAL '1 day')
-            )
-            UPDATE gas_storage_daily g
-               SET delta = CASE
-                             WHEN l.lag_percent IS NULL THEN NULL
-                             ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
-                           END
-              FROM lagged l
-             WHERE l.date = g.date
-               AND g.date >= (SELECT since FROM bounds)
-        """)
-    res = sess.execute(sql, {"days": days} if days is not None else {})
-    sess.commit()
-    return res.rowcount  # koľko riadkov sa aktualizovalo
+def api_recompute_deltas(days: int | None = None):
+    """
+    Prepočet dennej zmeny zásob (delta)
+    - POST /api/recompute-deltas  → plný prepočet
+    - POST /api/recompute-deltas?days=10  → len posledných 10 dní
+    """
+    sess = SessionLocal()
+    try:
+        if days and days > 0:
+            sql = text("""
+                WITH bounds AS (
+                  SELECT (MAX(date) - INTERVAL :days || ' days')::date AS since
+                  FROM gas_storage_daily
+                ),
+                lagged AS (
+                  SELECT g.date,
+                         LAG(g.percent) OVER (ORDER BY g.date) AS lag_percent
+                  FROM gas_storage_daily g
+                  JOIN bounds b ON g.date >= (b.since - INTERVAL '1 day')
+                )
+                UPDATE gas_storage_daily g
+                   SET delta = CASE
+                                 WHEN l.lag_percent IS NULL THEN NULL
+                                 ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                               END
+                  FROM lagged l
+                 WHERE l.date = g.date
+                   AND g.date >= (SELECT since FROM bounds)
+            """)
+            res = sess.execute(sql, {"days": days})
+            sess.commit()
+            return {"ok": True, "mode": f"last_{days}_days", "count": getattr(res, "rowcount", 0)}
+        else:
+            sql = text("""
+                WITH lagged AS (
+                  SELECT date,
+                         LAG(percent) OVER (ORDER BY date) AS lag_percent
+                  FROM gas_storage_daily
+                )
+                UPDATE gas_storage_daily g
+                   SET delta = CASE
+                                 WHEN l.lag_percent IS NULL THEN NULL
+                                 ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                               END
+                  FROM lagged l
+                 WHERE l.date = g.date
+            """)
+            res = sess.execute(sql)
+            sess.commit()
+            return {"ok": True, "mode": "full", "count": getattr(res, "rowcount", 0)}
+    except Exception as e:
+        sess.rollback()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
