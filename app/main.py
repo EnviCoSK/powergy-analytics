@@ -726,10 +726,10 @@ def api_recompute_deltas(days: int | None = None):
             UPDATE gas_storage_daily g
                SET delta = CASE
                              WHEN l.lag_percent IS NULL THEN NULL
-                             ELSE ROUND(g.percent - l.lag_percent, 2)
-                           END
-              FROM lagged l
-             WHERE l.date = g.date
+                             ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                            END
+               FROM lagged l
+              WHERE l.date = g.date
         """)
         res = sess.execute(sql)
         sess.commit()
