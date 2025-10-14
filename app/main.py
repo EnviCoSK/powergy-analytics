@@ -704,19 +704,11 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
 
 @app.post("/api/recompute-deltas")
 @app.get("/api/recompute-deltas")
-def api_recompute_deltas(days: int | None = None):
-    """
-    GET/POST /api/recompute-deltas
-    - bez parametra: plný prepočet cez SQL window funkciu (rýchle)
-    - ?days=N: prepočíta len posledných N dní (pythonom)
-    """
-    sess = SessionLocal()
-    try:
-        if days and days > 0:
-            changed = _recompute_last_n_days(sess, days)
-            return {"ok": True, "mode": f"last_{days}_days", "changed": changed}
+from sqlalchemy import text
 
-        # full recompute – SQL window (najrýchlejšie a presné)
+def recompute_deltas_sql(sess, days: int | None = None):
+    if days is None:
+        # FULL RE-CALC
         sql = text("""
             WITH lagged AS (
               SELECT date,
@@ -727,16 +719,32 @@ def api_recompute_deltas(days: int | None = None):
                SET delta = CASE
                              WHEN l.lag_percent IS NULL THEN NULL
                              ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
-                            END
-               FROM lagged l
-              WHERE l.date = g.date
+                           END
+              FROM lagged l
+             WHERE l.date = g.date
         """)
-        res = sess.execute(sql)
-        sess.commit()
-        # rowcount môže byť -1 pri niektorých PG verziách; ber to skôr informačne
-        return {"ok": True, "mode": "full", "rowcount": getattr(res, "rowcount", None)}
-    except Exception as e:
-        sess.rollback()
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    finally:
-        sess.close()
+    else:
+        # RECENT N-DAY RE-CALC (zohľadní aj včerajšok kvôli LAG)
+        sql = text("""
+            WITH bounds AS (
+              SELECT (MAX(date) - INTERVAL :days || ' days')::date AS since
+              FROM gas_storage_daily
+            ),
+            lagged AS (
+              SELECT g.date,
+                     LAG(g.percent) OVER (ORDER BY g.date) AS lag_percent
+              FROM gas_storage_daily g
+              JOIN bounds b ON g.date >= (b.since - INTERVAL '1 day')
+            )
+            UPDATE gas_storage_daily g
+               SET delta = CASE
+                             WHEN l.lag_percent IS NULL THEN NULL
+                             ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                           END
+              FROM lagged l
+             WHERE l.date = g.date
+               AND g.date >= (SELECT since FROM bounds)
+        """)
+    res = sess.execute(sql, {"days": days} if days is not None else {})
+    sess.commit()
+    return res.rowcount  # koľko riadkov sa aktualizovalo
