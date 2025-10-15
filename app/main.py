@@ -4,9 +4,11 @@ from __future__ import annotations
 import os
 import io
 import csv
+import datetime as dt
 from datetime import timedelta as TD
 from typing import Optional
 
+import requests
 from fastapi import FastAPI, Query
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -287,7 +289,7 @@ INDEX_HTML = Template("""<!doctype html>
       const w1 = g.measureText(`${date}`).width;
       const w2 = g.measureText(line1).width;
       const w3 = g.measureText(line2).width;
-      const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
+      const boxW = Math.ceil(max(w1, w2, w3)) + pad*2;
       const lineH = 16;
       const lines = (vPrev!=null) ? 3 : 2;
       const boxH = lineH*lines + 6;
@@ -721,6 +723,97 @@ def api_recompute_deltas(days: int | None = Query(None)):
         changed = getattr(res, "rowcount", 0) or 0
         return {"ok": True, "mode": "full", "changed": changed}
 
+    except Exception as e:
+        sess.rollback()
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+
+# ---------------------------- Daily ingest from AGSI ----------------------------
+def _agsi_headers():
+    key = os.getenv("AGSI_API_KEY", "")
+    return {"x-key": key} if key else {}
+
+def _fetch_agsi_eu_full(date_str: str) -> float | None:
+    """Vráti percento naplnenia 'full' pre EU v daný gas_day (YYYY-MM-DD), alebo None."""
+    url = "https://agsi.gie.eu/api"
+    params = {
+        "type": "eu",
+        "from": date_str,
+        "to": date_str,
+        "size": 100,
+        "gas_day": "asc",
+        "page": 1,
+    }
+    r = requests.get(url, headers=_agsi_headers(), params=params, timeout=25)
+    r.raise_for_status()
+    j = r.json()
+    data = j.get("data") or []
+    if not data:
+        return None
+    # Hľadáme presný záznam pre daný deň
+    for item in data:
+        if str(item.get("gasDayStart")) == date_str:
+            # 'full' je percento naplnenia, môže byť string -> float
+            try:
+                return float(item.get("full"))
+            except Exception:
+                return None
+    # fallback: ak je len jeden záznam, použi ho
+    try:
+        return float(data[-1].get("full"))
+    except Exception:
+        return None
+
+@app.api_route("/api/ingest-agsi-today", methods=["GET", "POST"], response_class=JSONUTF8Response)
+def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, skúsi today→today-1→today-2")):
+    """
+    Dotiahne a uloží posledný dostupný deň z AGSI (EU 'full' %), spraví upsert a spočíta deltu.
+    """
+    if not os.getenv("AGSI_API_KEY"):
+        return JSONUTF8Response({"ok": False, "error": "AGSI_API_KEY missing"}, status_code=400)
+
+    sess = SessionLocal()
+    try:
+        candidates = []
+        if date:
+            candidates = [date]
+        else:
+            today = dt.date.today()
+            candidates = [str(today), str(today - dt.timedelta(days=1)), str(today - dt.timedelta(days=2))]
+
+        picked_date = None
+        picked_full = None
+        for d in candidates:
+            val = _fetch_agsi_eu_full(d)
+            if val is not None:
+                picked_date = d
+                picked_full = round(float(val), 2)
+                break
+
+        if picked_date is None:
+            return JSONUTF8Response({"ok": False, "error": "No AGSI data for candidates", "candidates": candidates}, status_code=404)
+
+        # Upsert do DB
+        d = dt.date.fromisoformat(picked_date)
+        row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == d).first()
+
+        # nájdi včerajšok pre deltu
+        prev_date = d - dt.timedelta(days=1)
+        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
+        prev_percent = _to_float(prev.percent) if prev else None
+        delta = None if prev_percent is None else round(picked_full - prev_percent, 2)
+
+        if row:
+            row.percent = picked_full
+            row.delta = delta
+            # komentár necháme tak; vygeneruje ho /api/refresh-comment
+        else:
+            sess.add(GasStorageDaily(date=d, percent=picked_full, delta=delta, comment=None))
+
+        sess.commit()
+        return {"ok": True, "date": picked_date, "percent": picked_full, "delta": delta}
     except Exception as e:
         sess.rollback()
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
