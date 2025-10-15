@@ -4,11 +4,12 @@ from __future__ import annotations
 import os
 import io
 import csv
-from datetime import timedelta, date as _date
+from datetime import timedelta as TD
+from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, ORJSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Template
 from sqlalchemy import func, text, inspect
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,7 +24,7 @@ from .database import SessionLocal, init_db
 from .models import GasStorageDaily
 
 # -----------------------------------------------------------------------------
-# JSON with explicit UTF-8 to avoid mojibake in some clients
+# JSON with explicit UTF-8 to avoid mojibake
 # -----------------------------------------------------------------------------
 class JSONUTF8Response(JSONResponse):
     media_type = "application/json; charset=utf-8"
@@ -34,10 +35,10 @@ app.add_middleware(GZipMiddleware, minimum_size=512)
 
 
 # -----------------------------------------------------------------------------
-# Helpers: safe comment + mojibake fixer
+# Helpers
 # -----------------------------------------------------------------------------
 def fix_mojibake(s: str) -> str:
-    """Try to repair UTF-8 text that was decoded as Latin-1 (e.g., 'ZĂĄsobnĂ­ky')."""
+    """Repair UTF-8 text that was decoded as Latin-1 (e.g., 'ZĂĄsobnĂ­ky')."""
     if not s:
         return s
     if any(ch in s for ch in "ĂÄÅÃÂŠŽŤĎĽĹ"):
@@ -50,40 +51,59 @@ def fix_mojibake(s: str) -> str:
     return s
 
 
-def _fallback_comment(percent: float, delta: float | None) -> str:
-    d = "bez dennej zmeny" if (delta is None or abs(delta) < 0.005) else (
+def _to_float(x):
+    """Safely convert common numeric inputs to float."""
+    if x is None:
+        return None
+    try:
+        from decimal import Decimal
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, Decimal):
+            return float(x)
+        if isinstance(x, str):
+            s = x.strip().replace("%", "").replace(",", ".")
+            return float(s)
+        return float(x)
+    except Exception:
+        return None
+
+
+def _fallback_comment(percent: float, delta: Optional[float], yoy_gap: Optional[float]) -> str:
+    d_text = "bez dennej zmeny" if (delta is None or abs(delta) < 0.005) else (
         f"denná zmena +{delta:.2f} p.b." if delta > 0 else f"denná zmena {delta:.2f} p.b."
     )
+    yoy_text = "" if yoy_gap is None else f" vs. minulý rok {('+' if yoy_gap>0 else '')}{yoy_gap:.2f} p.b."
     return (
         f"Zásobníky plynu v EÚ sú aktuálne naplnené na {percent:.2f} %. "
-        f"{d}. Úroveň zásob pôsobí stabilizačne na prompt; krátkodobo rozhodnú počasie, "
+        f"{d_text}{yoy_text}. Úroveň zásob pôsobí stabilizačne na prompt; krátkodobo rozhodnú počasie, "
         f"prítoky LNG a prípadné neplánované odstávky."
     )
 
 
-# Optional external generator (if present)
+# External generator (if present)
 try:
     from .gpt import generate_comment as _generate_comment_inner  # type: ignore
 except Exception:
     _generate_comment_inner = None  # type: ignore
 
 
-def generate_comment_safe(percent: float, delta: float | None) -> str:
-    """Generate a short comment; never returns empty (uses fallback if GPT fails)."""
+def generate_comment_safe(percent: float, delta: Optional[float], yoy_gap: Optional[float]) -> str:
+    """Generate short comment; uses fallback if GPT not configured/failed."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or _generate_comment_inner is None:
-        return _fallback_comment(percent, delta)
+        return _fallback_comment(percent, delta, yoy_gap)
     try:
-        txt = _generate_comment_inner(api_key, percent, delta)  # your original signature
+        txt = _generate_comment_inner(api_key, percent, delta, yoy_gap)  # matches your signature
         if not txt or not str(txt).strip():
-            return _fallback_comment(percent, delta)
+            return _fallback_comment(percent, delta, yoy_gap)
         return str(txt).strip()
     except Exception:
-        return _fallback_comment(percent, delta)
+        return _fallback_comment(percent, delta, yoy_gap)
 
 
 # -----------------------------------------------------------------------------
-# HTML (minimal, with working IDs: rangeSel, btnCsv, btnXlsx)
+# HTML (kept minimal; focuses on API correctness in this patch)
 # -----------------------------------------------------------------------------
 INDEX_HTML = Template("""<!doctype html>
 <html lang="sk">
@@ -99,9 +119,7 @@ INDEX_HTML = Template("""<!doctype html>
  h1 { font-size: 22px; margin: 0 0 8px; }
  .muted { color:#6b7280; }
  canvas { width: 100%; max-width: 980px; height: 320px; }
- .section { margin-top: 16px; }
  button, select { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; }
- button:hover { background:#f9fafb; }
  .toolbar { display:flex; gap:8px; align-items:center; }
 </style>
 </head>
@@ -302,7 +320,6 @@ INDEX_HTML = Template("""<!doctype html>
       renderTable(state.records);
       return;
     }
-    showMsg('Načítavam…');
     const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
     if(!r.ok){ showMsg(`HTTP ${r.status}`); return; }
     const data = await r.json();
@@ -364,11 +381,7 @@ def _startup():
     init_db()
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return INDEX_HTML.render()
-
-
+# ---------------------------- Diagnostics ----------------------------
 @app.get("/api/health", response_class=JSONUTF8Response)
 def api_health():
     try:
@@ -409,6 +422,13 @@ def api_db_stats():
         sess.close()
 
 
+# ---------------------------- UI Root ----------------------------
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return INDEX_HTML.render()
+
+
+# ---------------------------- Core API ----------------------------
 @app.get("/api/today", response_class=JSONUTF8Response)
 def api_today():
     sess = SessionLocal()
@@ -417,18 +437,8 @@ def api_today():
         if not row:
             return JSONUTF8Response({"message": "No data yet"}, status_code=404)
 
-        percent = float(row.percent)
-        delta   = None if row.delta is None else float(row.delta)
-
-        # ensure comment exists
-        if not row.comment or not str(row.comment).strip():
-            try:
-                comment_new = generate_comment_safe(percent, delta)
-                row.comment = comment_new
-                sess.commit()
-            except Exception:
-                sess.rollback()
-
+        percent = _to_float(row.percent)
+        delta   = _to_float(row.delta)
         comment_out = fix_mojibake(row.comment or "")
 
         return {
@@ -437,12 +447,9 @@ def api_today():
             "delta": delta,
             "comment": comment_out,
         }
-
     except SQLAlchemyError as e:
         sess.rollback()
         return JSONUTF8Response({"ok": False, "error": "db_error", "detail": str(e)}, status_code=500)
-    except Exception as e:
-        return JSONUTF8Response({"ok": False, "error": "today_failed", "detail": repr(e)}, status_code=500)
     finally:
         sess.close()
 
@@ -468,11 +475,10 @@ def api_history(days: int = 30):
 
         records = [{
             "date": str(r.date),
-            "percent": round(float(r.percent), 2),
-            "delta": None if r.delta is None else round(float(r.delta), 2),
+            "percent": round(float(_to_float(r.percent)), 2),
+            "delta": None if r.delta is None else round(float(_to_float(r.delta)), 2),
         } for r in rows]
 
-        from datetime import timedelta as TD
         start_prev = rows[0].date - TD(days=365)
         end_prev   = rows[-1].date - TD(days=365)
 
@@ -490,7 +496,7 @@ def api_history(days: int = 30):
             key = r.date - TD(days=365)
             pr = by_date.get(key)
             if pr:
-                prev_year.append({"date": str(pr.date), "percent": round(float(pr.percent), 2)})
+                prev_year.append({"date": str(pr.date), "percent": round(float(_to_float(pr.percent)), 2)})
             else:
                 prev_year.append({"date": str(key), "percent": baseline})
 
@@ -522,8 +528,8 @@ def api_export(fmt: str = "csv", days: int = 30):
             w.writerow(["date", "percent", "delta", "comment"])
             for r in rows:
                 w.writerow([str(r.date),
-                            f"{float(r.percent):.2f}",
-                            "" if r.delta is None else f"{float(r.delta):.2f}",
+                            f"{_to_float(r.percent):.2f}" if _to_float(r.percent) is not None else "",
+                            "" if r.delta is None else f"{_to_float(r.delta):.2f}",
                             (r.comment or "").replace("\n"," ").strip()])
             buf.seek(0)
             return StreamingResponse(
@@ -538,8 +544,8 @@ def api_export(fmt: str = "csv", days: int = 30):
                 w.writerow(["date", "percent", "delta", "comment"])
                 for r in rows:
                     w.writerow([str(r.date),
-                                f"{float(r.percent):.2f}",
-                                "" if r.delta is None else f"{float(r.delta):.2f}",
+                                f"{_to_float(r.percent):.2f}" if _to_float(r.percent) is not None else "",
+                                "" if r.delta is None else f"{_to_float(r.delta):.2f}",
                                 (r.comment or "").replace("\n"," ").strip()])
                 buf.seek(0)
                 return StreamingResponse(
@@ -553,8 +559,8 @@ def api_export(fmt: str = "csv", days: int = 30):
             ws.append(["date", "percent", "delta", "comment"])
             for r in rows:
                 ws.append([str(r.date),
-                           float(f"{float(r.percent):.2f}"),
-                           None if r.delta is None else float(f"{float(r.delta):.2f}"),
+                           float(f"{_to_float(r.percent):.2f}") if _to_float(r.percent) is not None else None,
+                           None if r.delta is None else float(f"{_to_float(r.delta):.2f}"),
                            (r.comment or "").strip()])
             xbuf = io.BytesIO()
             wb.save(xbuf)
@@ -571,9 +577,10 @@ def api_export(fmt: str = "csv", days: int = 30):
         sess.close()
 
 
+# ---------------------------- Comments ----------------------------
 @app.post("/api/backfill-comments", response_class=JSONUTF8Response)
 def backfill_comments(limit: int = 60, force: bool = False):
-    """Fill missing comments for last N rows; if force=True, overwrite all."""
+    """Fill missing comments for last N rows; if force=True, overwrite all (CAREFUL with tokens)."""
     sess = SessionLocal()
     try:
         rows = (sess.query(GasStorageDaily)
@@ -582,8 +589,20 @@ def backfill_comments(limit: int = 60, force: bool = False):
         changed = 0
         for r in rows:
             if force or not r.comment or not str(r.comment).strip():
-                r.comment = generate_comment_safe(float(r.percent),
-                                                  None if r.delta is None else float(r.delta))
+                current = _to_float(r.percent)
+                delta   = _to_float(r.delta)
+                # compute yoy_gap
+                try:
+                    prev_date = r.date.replace(year=r.date.year - 1)
+                except ValueError:
+                    prev_date = r.date - TD(days=365)
+                prev = (sess.query(GasStorageDaily)
+                             .filter(GasStorageDaily.date == prev_date)
+                             .first())
+                yoy_gap = None
+                if prev and current is not None and _to_float(prev.percent) is not None:
+                    yoy_gap = round(current - _to_float(prev.percent), 2)
+                r.comment = generate_comment_safe(current or 0.0, delta, yoy_gap)
                 changed += 1
         sess.commit()
         return {"ok": True, "updated": changed}
@@ -594,117 +613,52 @@ def backfill_comments(limit: int = 60, force: bool = False):
         sess.close()
 
 
-@app.get("/api/gpt-status", response_class=JSONUTF8Response)
-def gpt_status():
-    return {"ok": True, "has_key": bool(os.getenv("OPENAI_API_KEY"))}
-
-
-@app.post("/api/recompute-deltas", response_class=JSONUTF8Response)
-def api_recompute_deltas():
+@app.api_route("/api/refresh-comment", methods=["GET", "POST"], response_class=JSONUTF8Response)
+def api_refresh_comment(force: bool = Query(False, description="Ak true, prepíše existujúci komentár")):
+    """
+    Vygeneruje a uloží komentár pre najnovší záznam.
+    - ak komentár už existuje a force=false → neregeneruje (šetrenie tokenov),
+    - vypočíta yoy_gap (rozdiel voči minuloročnému dátumu),
+    - všetky čísla pretypuje na float (žiadny 'Unknown format code f').
+    """
     sess = SessionLocal()
     try:
-        rows = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.asc()).all()
-        prev = None
-        for r in rows:
-            if prev is None:
-                r.delta = None
-            else:
-                r.delta = round(float(r.percent) - float(prev.percent), 2)
-            prev = r
+        row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        if not row:
+            return JSONUTF8Response({"ok": False, "error": "No rows"}, status_code=404)
+
+        if row.comment and not force:
+            return {"ok": True, "skipped": True, "date": str(row.date)}
+
+        current = _to_float(row.percent)
+        delta   = _to_float(row.delta)
+
+        # nájdi minuloročný deň (ošetrenie 29.2.)
+        d = row.date
+        try:
+            prev_date = d.replace(year=d.year - 1)
+        except ValueError:
+            prev_date = d - TD(days=365)
+
+        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
+        prev_percent = _to_float(prev.percent) if prev else None
+        yoy_gap = None if (current is None or prev_percent is None) else round(current - prev_percent, 2)
+
+        row.comment = generate_comment_safe(current or 0.0, delta, yoy_gap)
         sess.commit()
-        return {"ok": True, "count": len(rows)}
+
+        return {"ok": True, "date": str(row.date), "percent": current, "delta": delta, "yoy_gap": yoy_gap}
     except Exception as e:
         sess.rollback()
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
 
-def _recompute_last_n_days(sess, n: int = 10) -> int:
-    # spočítame posledných n+1 dní, aby sme vedeli vypočítať deltu pre prvý z N dní
-    rows = (
-        sess.query(GasStorageDaily)
-        .order_by(GasStorageDaily.date.desc())
-        .limit(n + 1)
-        .all()
-    )
-    rows = list(reversed(rows))
-    prev = None
-    changed = 0
-    for r in rows:
-        if prev is None:
-            new_delta = None
-        else:
-            if r.percent is not None and prev.percent is not None:
-                new_delta = round(float(r.percent) - float(prev.percent), 2)
-            else:
-                new_delta = None
-        if r.delta != new_delta:
-            r.delta = new_delta
-            changed += 1
-        prev = r
-    sess.commit()
-    return changed
 
-# --- AGSI backfill od dátumu ---
-@app.api_route("/api/backfill-agsi", methods=["GET", "POST"], response_class=ORJSONResponse)
-def api_backfill_agsi(from_: str = Query(..., alias="from", description="YYYY-MM-DD")):
-    """
-    Dotiahne historické dáta z AGSI od dátumu `from` po dnes.
-    """
-    try:
-        from .scraper import backfill_agsi
-        res = backfill_agsi(from_)
-        return {"ok": True, **res}
-    except Exception as e:
-        return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-# --- refresh komentára pre najnovší deň ---
-@app.post("/api/refresh-comment", response_class=ORJSONResponse)
-@app.api_route("/api/refresh-comment", methods=["GET", "POST"], response_class=ORJSONResponse)
-def api_refresh_comment(force: bool = Query(False, description="Ak true, prepíše existujúci komentár")):
-    """
-    Vygeneruje a uloží komentár pre najnovší záznam:
-    - počíta yoy_gap (rozdiel vs. minuloročný dátum),
-    - ak komentár existuje a force=false → neregeneruje (šetrenie tokenov).
-    """
-    import os
-    from .gpt import generate_comment  # má signatúru (api_key, current, delta, yoy_gap)
-
-    sess = SessionLocal()
-    try:
-        row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-        if not row:
-            return ORJSONResponse({"ok": False, "error": "No rows"}, status_code=404)
-
-        if row.comment and not force:
-            # už existuje → neplytváme tokenmi
-            return {"ok": True, "skipped": True, "date": str(row.date)}
-
-        # vypočítaj yoy_gap (rozdiel voči predchádzajúcemu roku)
-        d = row.date
-        try:
-            prev_date = d.replace(year=d.year - 1)
-        except ValueError:
-            from datetime import timedelta
-            prev_date = d - timedelta(days=365)
-
-        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
-        yoy_gap = round(row.percent - prev.percent, 2) if prev else None
-
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        # ak OpenAI padne, doplň si v generate_comment fallback alebo tu obal try/except
-        row.comment = generate_comment(api_key, row.percent, row.delta, yoy_gap)
-        sess.commit()
-        return {"ok": True, "date": str(row.date), "percent": float(row.percent), "yoy_gap": yoy_gap}
-    except Exception as e:
-        sess.rollback()
-        return ORJSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    finally:
-        sess.close()
-
+# ---------------------------- Deltas recompute ----------------------------
 @app.post("/api/recompute-deltas")
 @app.get("/api/recompute-deltas")
-def api_recompute_deltas(days: int | None = None):
+def api_recompute_deltas(days: int | None = Query(None)):
     """
     Prepočíta denné zmeny (delta) v tabuľke gas_storage_daily.
     - Bez parametru -> prepočet celej tabuľky
@@ -712,33 +666,26 @@ def api_recompute_deltas(days: int | None = None):
     """
     sess = SessionLocal()
     try:
-        # normalizácia/validácia
-        mode = "full"
-        params: dict[str, int] = {}
         if days is not None:
             try:
                 days = int(days)
             except Exception:
-                return JSONResponse({"ok": False, "error": "days must be integer"}, status_code=400)
+                return JSONUTF8Response({"ok": False, "error": "days must be integer"}, status_code=400)
             if days <= 0:
-                return JSONResponse({"ok": False, "error": "days must be > 0"}, status_code=400)
-            # rozumné maximum, nechtiac si neodpáliš celé
+                return JSONUTF8Response({"ok": False, "error": "days must be > 0"}, status_code=400)
             days = min(days, 365*5)
-            mode = f"last_{days}_days"
-            params = {"days": days}
 
-        if mode != "full":
-            # inkrementálny prepočet (make_interval)
+            # inkrementálny prepočet s bezpečným intervalom
             sql = text("""
                 WITH bounds AS (
-                  SELECT (MAX(date) - make_interval(days => :days))::date AS since
+                  SELECT (MAX(date) - (:d || ' days')::interval)::date AS since
                   FROM gas_storage_daily
                 ),
                 lagged AS (
                   SELECT g.date,
                          LAG(g.percent) OVER (ORDER BY g.date) AS lag_percent
                   FROM gas_storage_daily g
-                  JOIN bounds b ON g.date >= (b.since - INTERVAL '1 day')
+                  WHERE g.date >= (SELECT since FROM bounds) - INTERVAL '1 day'
                 )
                 UPDATE gas_storage_daily g
                    SET delta = CASE
@@ -749,31 +696,33 @@ def api_recompute_deltas(days: int | None = None):
                  WHERE l.date = g.date
                    AND g.date >= (SELECT since FROM bounds)
             """)
-            res = sess.execute(sql, params)
+            res = sess.execute(sql, {"d": days})
             sess.commit()
-            return {"ok": True, "mode": mode, "changed": getattr(res, "rowcount", 0)}
-        else:
-            # full prepočet
-            sql = text("""
-                WITH lagged AS (
-                  SELECT date,
-                         LAG(percent) OVER (ORDER BY date) AS lag_percent
-                  FROM gas_storage_daily
-                )
-                UPDATE gas_storage_daily g
-                   SET delta = CASE
-                                 WHEN l.lag_percent IS NULL THEN NULL
-                                 ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
-                               END
-                  FROM lagged l
-                 WHERE l.date = g.date
-            """)
-            res = sess.execute(sql)
-            sess.commit()
-            return {"ok": True, "mode": "full", "changed": getattr(res, "rowcount", 0)}
+            changed = getattr(res, "rowcount", 0) or 0
+            return {"ok": True, "mode": f"last_{days}_days", "changed": changed}
+
+        # full prepočet
+        sql = text("""
+            WITH lagged AS (
+              SELECT date,
+                     LAG(percent) OVER (ORDER BY date) AS lag_percent
+              FROM gas_storage_daily
+            )
+            UPDATE gas_storage_daily g
+               SET delta = CASE
+                             WHEN l.lag_percent IS NULL THEN NULL
+                             ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                           END
+              FROM lagged l
+             WHERE l.date = g.date
+        """)
+        res = sess.execute(sql)
+        sess.commit()
+        changed = getattr(res, "rowcount", 0) or 0
+        return {"ok": True, "mode": "full", "changed": changed}
 
     except Exception as e:
         sess.rollback()
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:
         sess.close()
