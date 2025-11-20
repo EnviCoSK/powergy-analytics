@@ -594,27 +594,31 @@ def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-D
     
     sess = SessionLocal()
     try:
+        # Zistíme maximálny dátum (včerajšok, lebo AGSI API má oneskorenie)
+        max_date = dt.date.today() - dt.timedelta(days=1)
+        
         if from_date:
             start_date = from_date
+            start_date_obj = dt.date.fromisoformat(start_date)
+            if start_date_obj > max_date:
+                return JSONUTF8Response({
+                    "ok": False, 
+                    "error": f"from_date ({start_date}) is in the future. AGSI API has delay, max available date is {max_date}",
+                    "from_date": start_date,
+                    "max_available_date": str(max_date)
+                }, status_code=400)
         else:
             # Zistíme posledný dátum v DB
             last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
             if last_row:
-                start_date = str(last_row.date + dt.timedelta(days=1))
+                calculated_start = last_row.date + dt.timedelta(days=1)
+                # Ak je vypočítaný dátum v budúcnosti, použijeme včerajšok
+                if calculated_start > max_date:
+                    start_date = str(max_date)
+                else:
+                    start_date = str(calculated_start)
             else:
                 start_date = "2025-01-01"
-        
-        # Zistíme maximálny dátum (včerajšok, lebo AGSI API má oneskorenie)
-        max_date = dt.date.today() - dt.timedelta(days=1)
-        start_date_obj = dt.date.fromisoformat(start_date)
-        
-        if start_date_obj > max_date:
-            return JSONUTF8Response({
-                "ok": False, 
-                "error": f"from_date ({start_date}) is in the future. AGSI API has delay, max available date is {max_date}",
-                "from_date": start_date,
-                "max_available_date": str(max_date)
-            }, status_code=400)
         
         from .scraper import backfill_agsi
         result = backfill_agsi(start_date)
