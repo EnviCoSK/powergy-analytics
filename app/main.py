@@ -71,6 +71,18 @@ def _to_float(x):
         return None
 
 
+def _format_date(date_obj) -> str:
+    """Formátuje dátum do formátu DD.MM.YYYY."""
+    if isinstance(date_obj, str):
+        try:
+            date_obj = dt.date.fromisoformat(date_obj)
+        except Exception:
+            return date_obj
+    if isinstance(date_obj, dt.date):
+        return f"{date_obj.day:02d}.{date_obj.month:02d}.{date_obj.year}"
+    return str(date_obj)
+
+
 def _fallback_comment(percent: float, delta: Optional[float], yoy_gap: Optional[float]) -> str:
     d_text = "bez dennej zmeny" if (delta is None or abs(delta) < 0.005) else (
         f"denná zmena +{delta:.2f} p.b." if delta > 0 else f"denná zmena {delta:.2f} p.b."
@@ -284,8 +296,8 @@ INDEX_HTML = Template("""<!doctype html>
       }
 
       const date = records[hoverIdx].date;
-      const line1 = `2025: ${vCur.toFixed(2)} %`;
-      const line2 = (vPrev!=null) ? `2024: ${vPrev.toFixed(2)} %` : '';
+      const line1 = `${new Date().getFullYear()}: ${vCur.toFixed(2)} %`;
+      const line2 = (vPrev!=null) ? `${new Date().getFullYear()-1}: ${vPrev.toFixed(2)} %` : '';
       const pad = 6;
       g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       const w1 = g.measureText(`${date}`).width;
@@ -446,7 +458,7 @@ def api_today():
         comment_out = fix_mojibake(row.comment or "")
 
         return {
-            "date": str(row.date),
+            "date": _format_date(row.date),
             "percent": percent,
             "delta": delta,
             "comment": comment_out,
@@ -470,7 +482,7 @@ def api_history(days: int = 30):
     sess = SessionLocal()
     try:
         q = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(days)
-        rows = list(reversed(q.all()))
+        rows = q.all()  # Už sú zoradené od najnovšieho po najstarší
 
         if not rows:
             resp = JSONUTF8Response({"records": [], "prev_year": []})
@@ -478,7 +490,7 @@ def api_history(days: int = 30):
             return resp
 
         records = [{
-            "date": str(r.date),
+            "date": _format_date(r.date),
             "percent": round(float(_to_float(r.percent)), 2),
             "delta": None if r.delta is None else round(float(_to_float(r.delta)), 2),
         } for r in rows]
@@ -500,9 +512,9 @@ def api_history(days: int = 30):
             key = r.date - TD(days=365)
             pr = by_date.get(key)
             if pr:
-                prev_year.append({"date": str(pr.date), "percent": round(float(_to_float(pr.percent)), 2)})
+                prev_year.append({"date": _format_date(pr.date), "percent": round(float(_to_float(pr.percent)), 2)})
             else:
-                prev_year.append({"date": str(key), "percent": baseline})
+                prev_year.append({"date": _format_date(key), "percent": baseline})
 
         resp = JSONUTF8Response({"records": records, "prev_year": prev_year})
         resp.headers["Cache-Control"] = "public, max-age=30"
