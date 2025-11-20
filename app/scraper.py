@@ -324,9 +324,11 @@ def backfill_agsi(from_date: str = "2025-01-01"):
             # Použijeme cache existujúcich dátumov
             rec = existing_dates.get(d_obj)
             if rec:
-                # Aktualizujeme len ak sa hodnota zmenila
-                if rec.percent != p_val:
-                    rec.percent = p_val
+                # Aktualizujeme aj ak sa hodnota nezmenila (pre istotu)
+                old_percent = rec.percent
+                rec.percent = p_val
+                # Počítame ako update len ak sa hodnota skutočne zmenila
+                if old_percent != p_val:
                     updated += 1
             else:
                 # Nový záznam - pridáme do session a do cache
@@ -336,6 +338,31 @@ def backfill_agsi(from_date: str = "2025-01-01"):
                 inserted += 1
 
         sess.commit()
+        # Po commite vypočítame delty pre nové/aktualizované záznamy
+        if inserted > 0 or updated > 0:
+            try:
+                # Vypočítame delty pre záznamy, ktoré sme pridal/aktualizovali
+                from sqlalchemy import text
+                sess.execute(text("""
+                    WITH lagged AS (
+                      SELECT date,
+                             LAG(percent) OVER (ORDER BY date) AS lag_percent
+                      FROM gas_storage_daily
+                      WHERE date >= :start_date
+                    )
+                    UPDATE gas_storage_daily g
+                       SET delta = CASE
+                                     WHEN l.lag_percent IS NULL THEN NULL
+                                     ELSE ROUND((g.percent - l.lag_percent)::numeric, 2)::double precision
+                                   END
+                      FROM lagged l
+                     WHERE l.date = g.date
+                       AND g.date >= :start_date
+                """), {"start_date": dt.date.fromisoformat(from_date)})
+                sess.commit()
+            except Exception as e:
+                print(f"Warning: Failed to update deltas: {e}")
+        
         return {"inserted": inserted, "updated": updated, "source_count": len(rows)}
     except Exception as e:
         sess.rollback()
