@@ -688,9 +688,12 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
             return JSONUTF8Response({"ok": False, "error": "No rows"}, status_code=404)
 
         # Regeneruj komentár ak je prázdny alebo ak je force=True
-        has_comment = row.comment and str(row.comment).strip()
+        # Kontrolujeme aj prázdne stringy a whitespace
+        comment_text = str(row.comment) if row.comment else ""
+        has_comment = comment_text.strip() and len(comment_text.strip()) > 0
+        
         if has_comment and not force:
-            return {"ok": True, "skipped": True, "date": str(row.date)}
+            return {"ok": True, "skipped": True, "date": str(row.date), "has_comment": True, "comment_length": len(comment_text)}
 
         current = _to_float(row.percent)
         delta   = _to_float(row.delta)
