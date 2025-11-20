@@ -211,6 +211,11 @@ INDEX_HTML = Template("""<!doctype html>
   const btnCsv = document.getElementById('btnCsv');
   const btnXls = document.getElementById('btnXlsx');
   const btnChartPng = document.getElementById('btnChartPng');
+  
+  if(!rangeEl || !chartEl || !tableEl || !cardsEl || !statsEl || !alertsEl || !legendEl) {
+    console.error('Missing required DOM elements');
+    return;
+  }
 
   const cache = new Map();
   let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {} };
@@ -361,6 +366,11 @@ INDEX_HTML = Template("""<!doctype html>
   }
 
   function drawChart(records, prev, hoverIdx=null, yearsData={}){
+    if(!records || !records.length) {
+      showMsg('Žiadne dáta pre graf');
+      return;
+    }
+    
     const cssW = chartEl.clientWidth || 980;
     const cssH = 320;
     const dpi = window.devicePixelRatio || 1;
@@ -566,46 +576,58 @@ INDEX_HTML = Template("""<!doctype html>
     }
     
     // Legenda
-    const currentYear = new Date().getFullYear();
-    const legendItems = [
-      `<div class="legend-item">
-        <div class="legend-line" style="background:#2563eb;"></div>
-        <span>${currentYear}</span>
-      </div>`
-    ];
-    if(ref.length > 0) {
-      legendItems.push(`
-      <div class="legend-item">
-        <div class="legend-dash" style="color:#9ec5fe;"></div>
-        <span>${currentYear-1}</span>
-      </div>`);
-    }
-    yearColors.forEach(({key, color, name}) => {
-      if (yearsPercent[key] && yearsPercent[key].length > 0) {
+    if(legendEl) {
+      const currentYear = new Date().getFullYear();
+      const legendItems = [
+        `<div class="legend-item">
+          <div class="legend-line" style="background:#2563eb;"></div>
+          <span>${currentYear}</span>
+        </div>`
+      ];
+      if(ref.length > 0) {
         legendItems.push(`
         <div class="legend-item">
-          <div class="legend-dash" style="color:${color};"></div>
-          <span>${name}</span>
+          <div class="legend-dash" style="color:#9ec5fe;"></div>
+          <span>${currentYear-1}</span>
         </div>`);
       }
-    });
-    if(cur.length >= 7) {
-      legendItems.push(`
-      <div class="legend-item">
-        <div class="legend-dash" style="color:#8b5cf6;"></div>
-        <span>Predpoveď</span>
-      </div>`);
+      yearColors.forEach(({key, color, name}) => {
+        if (yearsPercent[key] && yearsPercent[key].length > 0) {
+          legendItems.push(`
+          <div class="legend-item">
+            <div class="legend-dash" style="color:${color};"></div>
+            <span>${name}</span>
+          </div>`);
+        }
+      });
+      if(cur.length >= 7) {
+        legendItems.push(`
+        <div class="legend-item">
+          <div class="legend-dash" style="color:#8b5cf6;"></div>
+          <span>Predpoveď</span>
+        </div>`);
+      }
+      legendEl.innerHTML = legendItems.join('');
     }
-    legendEl.innerHTML = legendItems.join('');
   }
 
   async function fetchToday(){
     showLoading(true);
     try {
       const r = await fetch('/api/today', {cache:'no-store'});
-      if(!r.ok){ cardsEl.innerHTML = '<div class="muted">Komentár sa nepodarilo načítať.</div>'; return; }
+      if(!r.ok){ 
+        cardsEl.innerHTML = '<div class="muted">Dáta sa nepodarilo načítať.</div>'; 
+        return; 
+      }
       const j = await r.json();
-      renderCards(j);
+      if(j && j.percent !== undefined) {
+        renderCards(j);
+      } else {
+        cardsEl.innerHTML = '<div class="muted">Žiadne dáta.</div>';
+      }
+    } catch(e) {
+      console.error('Error fetching today:', e);
+      cardsEl.innerHTML = '<div class="muted">Chyba pri načítaní dát.</div>';
     } finally {
       showLoading(false);
     }
@@ -617,26 +639,42 @@ INDEX_HTML = Template("""<!doctype html>
       const key = String(days);
       if(cache.has(key)){
         const data = cache.get(key);
-        state.records = data.records;
+        state.records = data.records || [];
         state.prev    = data.prev_year || [];
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
-        drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        if(state.records.length > 0) {
+          drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        }
         renderTable(state.records);
         renderStats(state.stats);
         return;
       }
       const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
-      if(!r.ok){ showMsg(`HTTP ${r.status}`); return; }
+      if(!r.ok){ 
+        showMsg(`HTTP ${r.status}`);
+        tableEl.innerHTML = '<div class="muted">Chyba pri načítaní dát.</div>';
+        return; 
+      }
       const data = await r.json();
-      cache.set(key, data);
-      state.records = data.records;
-      state.prev    = data.prev_year || [];
-      state.stats   = data.stats || {};
-      state.yearsData = data.years_data || {};
-      drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
-      renderTable(state.records);
-      renderStats(state.stats);
+      if(data && data.records) {
+        cache.set(key, data);
+        state.records = data.records || [];
+        state.prev    = data.prev_year || [];
+        state.stats   = data.stats || {};
+        state.yearsData = data.years_data || {};
+        if(state.records.length > 0) {
+          drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        }
+        renderTable(state.records);
+        renderStats(state.stats);
+      } else {
+        tableEl.innerHTML = '<div class="muted">Žiadne dáta.</div>';
+      }
+    } catch(e) {
+      console.error('Error fetching history:', e);
+      showMsg('Chyba pri načítaní dát.');
+      tableEl.innerHTML = '<div class="muted">Chyba pri načítaní dát.</div>';
     } finally {
       showLoading(false);
     }
@@ -675,16 +713,16 @@ INDEX_HTML = Template("""<!doctype html>
       const xCss = px / dpi;
       const {left, right, W, nx} = state.scale;
       if(xCss < left || xCss > (W-right)){
-        state.hoverIdx = null; drawChart(state.records, state.prev, null); return;
+        state.hoverIdx = null; drawChart(state.records, state.prev, null, state.yearsData); return;
       }
       const usable = (W-left-right);
       const t = (xCss - left) / Math.max(1, usable);
       const idx = Math.round(t * (nx - 1));
       state.hoverIdx = Math.max(0, Math.min(nx-1, idx));
-      drawChart(state.records, state.prev, state.hoverIdx);
+      drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
     };
     chartEl.addEventListener('mousemove', onMove);
-    chartEl.addEventListener('mouseleave', ()=>{ state.hoverIdx = null; drawChart(state.records, state.prev, null); });
+    chartEl.addEventListener('mouseleave', ()=>{ state.hoverIdx = null; drawChart(state.records, state.prev, null, state.yearsData); });
   }
 
   rangeEl.addEventListener('change', ()=> fetchHistory(Number(rangeEl.value || 30)));
