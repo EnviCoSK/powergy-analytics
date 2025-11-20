@@ -146,18 +146,29 @@ def _fetch_agsi_eu_full(date_str: str) -> float | None:
         if not data:
             return None
         # Hľadáme presný záznam pre daný deň
+        # gasDayStart môže byť v rôznych formátoch: "2025-11-20" alebo "2025-11-20T00:00:00+00:00"
+        date_str_clean = date_str[:10]  # Zajistíme len dátum bez času
         for item in data:
-            if str(item.get("gasDayStart"))[:10] == date_str:
+            gas_day = item.get("gasDayStart") or item.get("gas_day") or ""
+            gas_day_str = str(gas_day)[:10]  # Vezmeme len prvých 10 znakov (YYYY-MM-DD)
+            if gas_day_str == date_str_clean:
                 try:
-                    return float(item.get("full"))
+                    full_val = item.get("full") or item.get("fullness") or item.get("percentage")
+                    if full_val is not None:
+                        return float(full_val)
                 except Exception:
-                    return None
+                    continue
         # fallback: ak je len jeden záznam, použi ho
-        try:
-            return float(data[-1].get("full"))
-        except Exception:
-            return None
-    except Exception:
+        if len(data) > 0:
+            try:
+                full_val = data[-1].get("full") or data[-1].get("fullness") or data[-1].get("percentage")
+                if full_val is not None:
+                    return float(full_val)
+            except Exception:
+                pass
+        return None
+    except Exception as e:
+        print(f"Error fetching AGSI data for {date_str}: {e}")
         return None
 
 def run_daily_agsi():
@@ -171,12 +182,36 @@ def run_daily_agsi():
     init_db()
     sess = SessionLocal()
     try:
+        # Najprv zistíme posledný dátum v DB
+        last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        last_date = last_row.date if last_row else dt.date(2025, 1, 1)
+        
+        # Skúsime stiahnuť dáta od posledného dátumu + 1 deň až po dnes
         today = dt.date.today()
-        candidates = [
-            str(today),
-            str(today - dt.timedelta(days=1)),
-            str(today - dt.timedelta(days=2))
-        ]
+        start_date = last_date + dt.timedelta(days=1)
+        
+        # Ak je posledný dátum starší ako 7 dní, použijeme backfill
+        if (today - last_date).days > 7:
+            print(f"Last date in DB is {last_date}, using backfill from {start_date}")
+            try:
+                result = backfill_agsi(str(start_date))
+                print(f"Backfill result: {result}")
+            except Exception as e:
+                print(f"Backfill failed: {e}, continuing with single day fetch")
+            # Po backfille skúsime ešte dnes
+            start_date = today
+        
+        # Skúsime najnovšie dáta (dnes, včera, predvčerom)
+        candidates = []
+        for i in range(5):  # Skúsime až 5 dní dozadu
+            candidate = today - dt.timedelta(days=i)
+            if candidate >= start_date:
+                candidates.append(str(candidate))
+        
+        # Ak nemáme žiadne kandidáty, použijeme aspoň posledných 5 dní
+        if not candidates:
+            for i in range(5):
+                candidates.append(str(today - dt.timedelta(days=i)))
         
         picked_date = None
         picked_full = None
@@ -185,6 +220,7 @@ def run_daily_agsi():
             if val is not None:
                 picked_date = d
                 picked_full = round(float(val), 2)
+                print(f"Found AGSI data for {d}: {picked_full}%")
                 break
         
         if picked_date is None:

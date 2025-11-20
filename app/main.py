@@ -774,18 +774,27 @@ def _fetch_agsi_eu_full(date_str: str) -> float | None:
     if not data:
         return None
     # Hľadáme presný záznam pre daný deň
+    # gasDayStart môže byť v rôznych formátoch: "2025-11-20" alebo "2025-11-20T00:00:00+00:00"
+    date_str_clean = date_str[:10]  # Zajistíme len dátum bez času
     for item in data:
-        if str(item.get("gasDayStart")) == date_str:
-            # 'full' je percento naplnenia, môže byť string -> float
+        gas_day = item.get("gasDayStart") or item.get("gas_day") or ""
+        gas_day_str = str(gas_day)[:10]  # Vezmeme len prvých 10 znakov (YYYY-MM-DD)
+        if gas_day_str == date_str_clean:
             try:
-                return float(item.get("full"))
+                full_val = item.get("full") or item.get("fullness") or item.get("percentage")
+                if full_val is not None:
+                    return float(full_val)
             except Exception:
-                return None
+                continue
     # fallback: ak je len jeden záznam, použi ho
-    try:
-        return float(data[-1].get("full"))
-    except Exception:
-        return None
+    if len(data) > 0:
+        try:
+            full_val = data[-1].get("full") or data[-1].get("fullness") or data[-1].get("percentage")
+            if full_val is not None:
+                return float(full_val)
+        except Exception:
+            pass
+    return None
 
 @app.api_route("/api/ingest-agsi-today", methods=["GET", "POST"], response_class=JSONUTF8Response)
 def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, skúsi today→today-1→today-2")):
@@ -797,12 +806,20 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
 
     sess = SessionLocal()
     try:
+        # Zistíme posledný dátum v DB
+        last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+        last_date = last_row.date if last_row else dt.date(2025, 1, 1)
+        
         candidates = []
         if date:
             candidates = [date]
         else:
             today = dt.date.today()
-            candidates = [str(today), str(today - dt.timedelta(days=1)), str(today - dt.timedelta(days=2))]
+            # Skúsime až 5 dní dozadu, aby sme našli najnovšie dostupné dáta
+            for i in range(5):
+                candidate = today - dt.timedelta(days=i)
+                if candidate >= last_date:
+                    candidates.append(str(candidate))
 
         picked_date = None
         picked_full = None
@@ -814,7 +831,7 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
                 break
 
         if picked_date is None:
-            return JSONUTF8Response({"ok": False, "error": "No AGSI data for candidates", "candidates": candidates}, status_code=404)
+            return JSONUTF8Response({"ok": False, "error": "No AGSI data for candidates", "candidates": candidates, "last_date_in_db": str(last_date)}, status_code=404)
 
         # Upsert do DB
         d = dt.date.fromisoformat(picked_date)
