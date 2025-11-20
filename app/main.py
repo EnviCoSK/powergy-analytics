@@ -586,7 +586,8 @@ def api_export(fmt: str = "csv", days: int = 30):
 def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, použije posledný dátum v DB + 1 deň")):
     """
     Manuálne spustenie backfillu dát z AGSI API.
-    Stiahne všetky dáta od from_date (alebo od posledného dátumu v DB) po dnes.
+    Stiahne všetky dáta od from_date (alebo od posledného dátumu v DB) po včerajšok.
+    Poznámka: AGSI API má oneskorenie, dáta pre dnešok ešte nemusia byť dostupné.
     """
     if not os.getenv("AGSI_API_KEY"):
         return JSONUTF8Response({"ok": False, "error": "AGSI_API_KEY missing"}, status_code=400)
@@ -603,9 +604,21 @@ def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-D
             else:
                 start_date = "2025-01-01"
         
+        # Zistíme maximálny dátum (včerajšok, lebo AGSI API má oneskorenie)
+        max_date = dt.date.today() - dt.timedelta(days=1)
+        start_date_obj = dt.date.fromisoformat(start_date)
+        
+        if start_date_obj > max_date:
+            return JSONUTF8Response({
+                "ok": False, 
+                "error": f"from_date ({start_date}) is in the future. AGSI API has delay, max available date is {max_date}",
+                "from_date": start_date,
+                "max_available_date": str(max_date)
+            }, status_code=400)
+        
         from .scraper import backfill_agsi
         result = backfill_agsi(start_date)
-        return {"ok": True, "from_date": start_date, **result}
+        return {"ok": True, "from_date": start_date, "max_available_date": str(max_date), **result}
     except Exception as e:
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
     finally:

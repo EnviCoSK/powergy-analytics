@@ -114,10 +114,14 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
             page += 1
         return out
 
+    # AGSI API má oneskorenie - dáta pre dnešok ešte nemusia byť dostupné
+    # Použijeme včerajšok ako maximálny dátum
+    max_date = dt.date.today() - dt.timedelta(days=1)
+    
     base = {
         "type": "eu",                    # 🔑 kľúčové
         "from": from_date,
-        "to": dt.date.today().isoformat(),
+        "to": max_date.isoformat(),      # Použijeme včerajšok, nie dnes
         "size": 5000,                   # veľká strana, menej requestov
         "gas_day": "asc",               # staršie → novšie
     }
