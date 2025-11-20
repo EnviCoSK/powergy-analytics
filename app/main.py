@@ -687,7 +687,9 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
         if not row:
             return JSONUTF8Response({"ok": False, "error": "No rows"}, status_code=404)
 
-        if row.comment and not force:
+        # Regeneruj komentár ak je prázdny alebo ak je force=True
+        has_comment = row.comment and str(row.comment).strip()
+        if has_comment and not force:
             return {"ok": True, "skipped": True, "date": str(row.date)}
 
         current = _to_float(row.percent)
@@ -714,10 +716,19 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
         except Exception:
             pass
 
-        row.comment = generate_comment_safe(current or 0.0, delta, yoy_gap, trend7)
+        comment_text = generate_comment_safe(current or 0.0, delta, yoy_gap, trend7)
+        row.comment = comment_text
         sess.commit()
 
-        return {"ok": True, "date": str(row.date), "percent": current, "delta": delta, "yoy_gap": yoy_gap, "trend7": trend7}
+        return {
+            "ok": True, 
+            "date": str(row.date), 
+            "percent": current, 
+            "delta": delta, 
+            "yoy_gap": yoy_gap, 
+            "trend7": trend7,
+            "comment_generated": bool(comment_text and comment_text.strip())
+        }
     except Exception as e:
         sess.rollback()
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
