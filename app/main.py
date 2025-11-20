@@ -7,6 +7,8 @@ import csv
 import datetime as dt
 from datetime import timedelta as TD
 from typing import Optional
+from functools import lru_cache
+from time import time
 
 import requests
 from fastapi import FastAPI, Query
@@ -813,6 +815,10 @@ def api_today():
         sess.close()
 
 
+# Jednoduchý in-memory cache pre history endpoint
+_history_cache = {}
+_cache_ttl = 30  # sekúnd
+
 @app.get("/api/history", response_class=JSONUTF8Response)
 def api_history(days: int = 30):
     try:
@@ -822,9 +828,20 @@ def api_history(days: int = 30):
     if days <= 0 or days > 366:
         days = 30
 
+    # Skontrolujeme cache
+    cache_key = f"history_{days}"
+    now = time()
+    if cache_key in _history_cache:
+        cached_data, cached_time = _history_cache[cache_key]
+        if now - cached_time < _cache_ttl:
+            resp = JSONUTF8Response(cached_data)
+            resp.headers["Cache-Control"] = "public, max-age=30"
+            return resp
+
     sess = SessionLocal()
     try:
-        q = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(days)
+        # Optimalizácia: načítame len potrebné stĺpce
+        q = sess.query(GasStorageDaily.date, GasStorageDaily.percent, GasStorageDaily.delta).order_by(GasStorageDaily.date.desc()).limit(days)
         rows = list(reversed(q.all()))  # Zoradené od najstaršieho po najnovší (pre graf)
 
         if not rows:
@@ -850,11 +867,12 @@ def api_history(days: int = 30):
             "trend": "rast" if (records[-1]["percent"] > records[0]["percent"]) else "pokles" if len(records) > 1 else "stabilný"
         }
 
+        # Optimalizácia: jeden dotaz pre predchádzajúci rok
         start_prev = rows[0].date - TD(days=365)
         end_prev   = rows[-1].date - TD(days=365)
 
         prev_rows = (
-            sess.query(GasStorageDaily)
+            sess.query(GasStorageDaily.date, GasStorageDaily.percent)
             .filter(GasStorageDaily.date >= start_prev,
                     GasStorageDaily.date <= end_prev)
             .all()
@@ -872,26 +890,51 @@ def api_history(days: int = 30):
                 prev_year.append({"date": _format_date(key), "percent": baseline})
 
         # Sezónne porovnanie - pridať dáta pre predchádzajúce roky (2023, 2022, atď.)
+        # Optimalizácia: namiesto N*M dotazov (N=dni, M=roky), urobíme M dotazov
         years_data = {}
-        current_year = rows[0].date.year if rows else dt.date.today().year
-        for year_offset in range(2, 5):  # 2023, 2022, 2021
-            year_key = f"year_{current_year - year_offset}"
-            year_rows = []
-            for r in rows:
-                key = r.date - TD(days=365 * year_offset)
-                prev_rows_year = (
-                    sess.query(GasStorageDaily)
-                    .filter(GasStorageDaily.date == key)
-                    .first()
+        if rows:
+            current_year = rows[0].date.year
+            baseline = records[0]["percent"]
+            
+            # Vypočítame všetky dátumy, ktoré potrebujeme pre každý rok
+            for year_offset in range(2, 5):  # 2023, 2022, 2021
+                year_key = f"year_{current_year - year_offset}"
+                # Vytvoríme zoznam dátumov pre tento rok
+                target_dates = [r.date - TD(days=365 * year_offset) for r in rows]
+                if not target_dates:
+                    continue
+                
+                # Jeden dotaz pre všetky dátumy tohto roka - optimalizácia: načítame len potrebné stĺpce
+                min_date = min(target_dates)
+                max_date = max(target_dates)
+                prev_rows_year_all = (
+                    sess.query(GasStorageDaily.date, GasStorageDaily.percent)
+                    .filter(GasStorageDaily.date >= min_date,
+                            GasStorageDaily.date <= max_date)
+                    .all()
                 )
-                if prev_rows_year:
-                    year_rows.append({"date": _format_date(key), "percent": round(float(_to_float(prev_rows_year.percent)), 2)})
-                else:
-                    year_rows.append({"date": _format_date(key), "percent": baseline})
-            if year_rows:
-                years_data[year_key] = year_rows
+                # Vytvoríme mapu dátum -> percent
+                by_date_year = {p.date: p for p in prev_rows_year_all}
+                
+                # Zostavíme výsledok
+                year_rows = []
+                for r in rows:
+                    key = r.date - TD(days=365 * year_offset)
+                    pr = by_date_year.get(key)
+                    if pr:
+                        year_rows.append({"date": _format_date(key), "percent": round(float(_to_float(pr.percent)), 2)})
+                    else:
+                        year_rows.append({"date": _format_date(key), "percent": baseline})
+                
+                if year_rows:
+                    years_data[year_key] = year_rows
 
-        resp = JSONUTF8Response({"records": records, "prev_year": prev_year, "stats": stats, "years_data": years_data})
+        result_data = {"records": records, "prev_year": prev_year, "stats": stats, "years_data": years_data}
+        
+        # Uložíme do cache
+        _history_cache[cache_key] = (result_data, now)
+        
+        resp = JSONUTF8Response(result_data)
         resp.headers["Cache-Control"] = "public, max-age=30"
         return resp
 
