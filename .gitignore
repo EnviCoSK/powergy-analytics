@@ -56,3 +56,6 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Git credentials (NEVER commit!)
+.git-credentials
+
