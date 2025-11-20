@@ -197,11 +197,15 @@ def run_daily_agsi():
                 start_date = last_date + dt.timedelta(days=1)
                 result = backfill_agsi(str(start_date))
                 print(f"Backfill result: {result}")
-                # Po backfille aktualizujeme last_date
+                # Po backfille aktualizujeme last_date a refreshneme session
+                sess.expire_all()
                 last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
                 last_date = last_row.date if last_row else last_date
+                print(f"After backfill, last date is: {last_date}")
             except Exception as e:
                 print(f"Backfill failed: {e}, continuing with single day fetch")
+                import traceback
+                traceback.print_exc()
         
         # Skúsime najnovšie dáta (dnes, včera, predvčerom)
         candidates = []
@@ -281,6 +285,7 @@ def backfill_agsi(from_date: str = "2025-01-01"):
     """
     Načíta historické denné naplnenie zásobníkov pre EÚ z AGSI+ a uloží do DB.
     Expect: from_date = 'YYYY-MM-DD'
+    Používa upsert logiku - aktualizuje existujúce záznamy, pridáva nové.
     """
     if not AGSI_API_KEY:
         raise RuntimeError("Missing AGSI_API_KEY")
@@ -290,6 +295,12 @@ def backfill_agsi(from_date: str = "2025-01-01"):
     sess = SessionLocal()
     inserted, updated = 0, 0
     try:
+        # Získame všetky existujúce dátumy naraz pre rýchlejšie vyhľadávanie
+        existing_dates = {
+            r.date: r 
+            for r in sess.query(GasStorageDaily).all()
+        }
+        
         for row in rows:
             # dátum môže byť 'gasDayStart' alebo 'gas_day'
             d = (row.get("gasDayStart") or row.get("gas_day") or row.get("date") or "")[:10]
@@ -297,23 +308,32 @@ def backfill_agsi(from_date: str = "2025-01-01"):
             p = row.get("full") or row.get("fullness") or row.get("percentage")
             if not d or p is None:
                 continue
-            d_obj = dt.date.fromisoformat(d)
-            p_val = float(p)
+            
+            try:
+                d_obj = dt.date.fromisoformat(d)
+                p_val = float(p)
+            except (ValueError, TypeError):
+                continue
 
-            rec = sess.query(GasStorageDaily).filter(GasStorageDaily.date == d_obj).first()
+            # Použijeme cache existujúcich dátumov
+            rec = existing_dates.get(d_obj)
             if rec:
+                # Aktualizujeme len ak sa hodnota zmenila
                 if rec.percent != p_val:
                     rec.percent = p_val
                     updated += 1
             else:
-                sess.add(GasStorageDaily(date=d_obj, percent=p_val, delta=None, comment=None))
+                # Nový záznam - pridáme do session a do cache
+                new_rec = GasStorageDaily(date=d_obj, percent=p_val, delta=None, comment=None)
+                sess.add(new_rec)
+                existing_dates[d_obj] = new_rec  # Pridáme do cache, aby sme zabránili duplikátom
                 inserted += 1
 
         sess.commit()
         return {"inserted": inserted, "updated": updated, "source_count": len(rows)}
-    except Exception:
+    except Exception as e:
         sess.rollback()
-        raise
+        raise RuntimeError(f"Backfill failed: {str(e)}") from e
     finally:
         sess.close()
 
