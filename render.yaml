@@ -18,13 +18,15 @@ services:
   - type: cron
     name: powergy-scraper-daily
     env: docker
-    schedule: "0 5 * * *"
+    schedule: "0 8 * * *"
     dockerCommand: |
-      python -c "from app.scraper import run_daily; run_daily()"
+      python -c "from app.scraper import run_daily_agsi; run_daily_agsi()"
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      - key: AGSI_API_KEY
         sync: false
       - key: KYOS_URL
         value: https://gas.kyos.com/

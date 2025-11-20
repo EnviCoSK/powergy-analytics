@@ -124,6 +124,121 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
 
     return fetch_pages(base)
 
+def _fetch_agsi_eu_full(date_str: str) -> float | None:
+    """Vráti percento naplnenia 'full' pre EU v daný gas_day (YYYY-MM-DD), alebo None."""
+    if not AGSI_API_KEY:
+        return None
+    url = "https://agsi.gie.eu/api"
+    params = {
+        "type": "eu",
+        "from": date_str,
+        "to": date_str,
+        "size": 100,
+        "gas_day": "asc",
+        "page": 1,
+    }
+    headers = {"x-key": AGSI_API_KEY}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=25)
+        r.raise_for_status()
+        j = r.json()
+        data = j.get("data") or []
+        if not data:
+            return None
+        # Hľadáme presný záznam pre daný deň
+        for item in data:
+            if str(item.get("gasDayStart"))[:10] == date_str:
+                try:
+                    return float(item.get("full"))
+                except Exception:
+                    return None
+        # fallback: ak je len jeden záznam, použi ho
+        try:
+            return float(data[-1].get("full"))
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+def run_daily_agsi():
+    """
+    Dotiahne a uloží posledný dostupný deň z AGSI (EU 'full' %), spraví upsert a spočíta deltu.
+    Používa AGSI API namiesto KYOS scrapingu.
+    """
+    if not AGSI_API_KEY:
+        raise RuntimeError("Missing AGSI_API_KEY")
+    
+    init_db()
+    sess = SessionLocal()
+    try:
+        today = dt.date.today()
+        candidates = [
+            str(today),
+            str(today - dt.timedelta(days=1)),
+            str(today - dt.timedelta(days=2))
+        ]
+        
+        picked_date = None
+        picked_full = None
+        for d in candidates:
+            val = _fetch_agsi_eu_full(d)
+            if val is not None:
+                picked_date = d
+                picked_full = round(float(val), 2)
+                break
+        
+        if picked_date is None:
+            raise RuntimeError(f"No AGSI data for candidates: {candidates}")
+        
+        # Upsert do DB
+        d = dt.date.fromisoformat(picked_date)
+        row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == d).first()
+        
+        # nájdi včerajšok pre deltu
+        prev_date = d - dt.timedelta(days=1)
+        prev = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_date).first()
+        prev_percent = float(prev.percent) if prev and prev.percent is not None else None
+        delta = None if prev_percent is None else round(picked_full - prev_percent, 2)
+        
+        # Vypočítaj trend7 (7-dňový trend) a yoy_gap (medziročný rozdiel)
+        trend7 = 0.0
+        yoy_gap = 0.0
+        try:
+            # 7-dňový trend
+            week_ago = d - dt.timedelta(days=7)
+            week_ago_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == week_ago).first()
+            if week_ago_row and week_ago_row.percent is not None:
+                trend7 = round(picked_full - float(week_ago_row.percent), 2)
+            
+            # Medziročný rozdiel
+            try:
+                prev_year_date = d.replace(year=d.year - 1)
+            except ValueError:  # 29. február
+                prev_year_date = d - dt.timedelta(days=365)
+            prev_year_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_year_date).first()
+            if prev_year_row and prev_year_row.percent is not None:
+                yoy_gap = round(picked_full - float(prev_year_row.percent), 2)
+        except Exception:
+            pass
+        
+        # Generuj komentár
+        comment = generate_comment(picked_full, delta, trend7, yoy_gap)
+        
+        if row:
+            row.percent = picked_full
+            row.delta = delta
+            row.comment = comment
+        else:
+            sess.add(GasStorageDaily(date=d, percent=picked_full, delta=delta, comment=comment))
+        
+        sess.commit()
+        return {"ok": True, "date": picked_date, "percent": picked_full, "delta": delta}
+    except Exception as e:
+        sess.rollback()
+        raise
+    finally:
+        sess.close()
+
 def backfill_agsi(from_date: str = "2025-01-01"):
     """
     Načíta historické denné naplnenie zásobníkov pre EÚ z AGSI+ a uloží do DB.
@@ -165,4 +280,8 @@ def backfill_agsi(from_date: str = "2025-01-01"):
         sess.close()
 
 if __name__ == "__main__":
-    run_daily()
+    # Použi AGSI ak je dostupný, inak KYOS
+    if AGSI_API_KEY:
+        run_daily_agsi()
+    else:
+        run_daily()

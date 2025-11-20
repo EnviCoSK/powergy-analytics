@@ -22,9 +22,8 @@ fi
 # Skontroluj, či existuje remote
 if ! git remote get-url origin > /dev/null 2>&1; then
     echo -e "${YELLOW}⚠️  Remote 'origin' neexistuje.${NC}"
-    echo "Prosím, nastav remote repozitár:"
-    echo "  git remote add origin https://github.com/VASE_USERNAME/powergy-analytics.git"
-    exit 1
+    echo "Nastavujem remote repozitár..."
+    git remote add origin https://github.com/EnviCoSK/powergy-analytics.git
 fi
 
 # Zobraz zmeny

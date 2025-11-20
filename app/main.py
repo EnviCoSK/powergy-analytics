@@ -291,7 +291,7 @@ INDEX_HTML = Template("""<!doctype html>
       const w1 = g.measureText(`${date}`).width;
       const w2 = g.measureText(line1).width;
       const w3 = g.measureText(line2).width;
-      const boxW = Math.ceil(max(w1, w2, w3)) + pad*2;
+      const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
       const lineH = 16;
       const lines = (vPrev!=null) ? 3 : 2;
       const boxH = lineH*lines + 6;
