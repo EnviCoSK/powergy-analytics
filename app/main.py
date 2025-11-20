@@ -133,10 +133,38 @@ INDEX_HTML = Template("""<!doctype html>
  .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin-bottom:24px; }
  .card { border:1px solid #e5e7eb; border-radius:16px; padding:16px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
  h1 { font-size: 22px; margin: 0 0 8px; }
+ h3 { margin: 24px 0 12px 0; }
  .muted { color:#6b7280; }
  canvas { width: 100%; max-width: 980px; height: 320px; }
- button, select { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; }
+ button, select { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+ button:hover { background:#f9fafb; }
  .toolbar { display:flex; gap:8px; align-items:center; }
+ .section { margin-bottom:32px; }
+ .positive { color:#10b981; }
+ .negative { color:#ef4444; }
+ .neutral { color:#6b7280; }
+ .loading { opacity:0.5; pointer-events:none; }
+ .skeleton { background:linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size:200% 100%; animation:loading 1.5s infinite; }
+ @keyframes loading { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+ .stats { display:grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:24px; }
+ .stat-card { border:1px solid #e5e7eb; border-radius:12px; padding:12px; background:#f9fafb; }
+ .stat-label { font-size:12px; color:#6b7280; margin-bottom:4px; }
+ .stat-value { font-size:18px; font-weight:600; }
+ .alert { padding:12px; border-radius:8px; margin-bottom:16px; }
+ .alert-warning { background:#fef3c7; border:1px solid #fbbf24; color:#92400e; }
+ .alert-info { background:#dbeafe; border:1px solid #60a5fa; color:#1e40af; }
+ .legend { display:flex; gap:16px; margin-bottom:12px; font-size:12px; }
+ .legend-item { display:flex; align-items:center; gap:6px; }
+ .legend-line { width:20px; height:2px; }
+ .legend-dash { width:20px; height:2px; background-image: repeating-linear-gradient(to right, currentColor 0, currentColor 4px, transparent 4px, transparent 8px); }
+ table { width:100%; border-collapse:collapse; }
+ th { text-align:left; padding:8px; border-bottom:1px solid #e5e7eb; cursor:pointer; user-select:none; }
+ th:hover { background:#f9fafb; }
+ th.sort-asc::after { content:" ▲"; font-size:10px; }
+ th.sort-desc::after { content:" ▼"; font-size:10px; }
+ td { padding:8px; border-bottom:1px solid #f3f4f6; }
+ tr:hover { background:#f9fafb; }
+ .current-date { background:#eff6ff !important; font-weight:500; }
 </style>
 </head>
 <body>
@@ -151,13 +179,17 @@ INDEX_HTML = Template("""<!doctype html>
       </select>
       <button id="btnCsv">Export CSV</button>
       <button id="btnXlsx">Export Excel</button>
+      <button id="btnChartPng">Export grafu PNG</button>
     </div>
   </div>
 
+  <div id="alerts"></div>
   <div class="cards" id="cards"></div>
+  <div class="stats" id="stats"></div>
 
   <div class="section">
-    <h3>Trend zásob (porovnanie s 2024)</h3>
+    <h3>Trend zásob (porovnanie s minulým rokom)</h3>
+    <div class="legend" id="legend"></div>
     <canvas id="chart"></canvas>
     <div id="msg" class="muted"></div>
   </div>
@@ -173,26 +205,87 @@ INDEX_HTML = Template("""<!doctype html>
   const chartEl = document.getElementById('chart');
   const tableEl = document.getElementById('table');
   const cardsEl = document.getElementById('cards');
+  const statsEl = document.getElementById('stats');
+  const alertsEl = document.getElementById('alerts');
+  const legendEl = document.getElementById('legend');
   const btnCsv = document.getElementById('btnCsv');
   const btnXls = document.getElementById('btnXlsx');
+  const btnChartPng = document.getElementById('btnChartPng');
 
   const cache = new Map();
-  let state = { records: [], prev: [], hoverIdx: null, scale: null };
+  let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {} };
 
   function showMsg(text){ document.getElementById('msg').textContent = text || ''; }
+  function showLoading(show) {
+    document.body.classList.toggle('loading', show);
+  }
+
+  function getDeltaColor(delta) {
+    if (delta === null || delta === undefined) return 'neutral';
+    return delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral';
+  }
+
+  function renderAlerts(today) {
+    const alerts = [];
+    if (today.percent < 50) {
+      alerts.push({type: 'warning', msg: '⚠️ Kritická úroveň: Zásoby pod 50%'});
+    } else if (today.percent > 90) {
+      alerts.push({type: 'info', msg: '✅ Vysoká úroveň: Zásoby nad 90%'});
+    }
+    if (today.delta !== null && Math.abs(today.delta) > 1.0) {
+      alerts.push({type: 'warning', msg: `⚠️ Významná denná zmena: ${today.delta > 0 ? '+' : ''}${today.delta.toFixed(2)} p.b.`});
+    }
+    alertsEl.innerHTML = alerts.map(a => `<div class="alert alert-${a.type}">${a.msg}</div>`).join('');
+  }
 
   function renderCards(today){
     const delta = (today.delta == null) ? "—" : (today.delta > 0 ? `+${today.delta.toFixed(2)} p.b.` : `${today.delta.toFixed(2)} p.b.`);
+    const deltaClass = getDeltaColor(today.delta);
     cardsEl.innerHTML = `
       <div class="card">
         <div class="muted">Naplnenie zásobníkov (EÚ)</div>
         <div style="font-size:28px; font-weight:700;">${today.percent.toFixed(2)} %</div>
         <div class="muted">Dátum: ${today.date}</div>
-        <div class="muted">Denná zmena: ${delta}</div>
+        <div class="${deltaClass}">Denná zmena: ${delta}</div>
       </div>
       <div class="card" style="grid-column: span 2;">
         <div class="muted">Komentár</div>
         <div id="commentBox">${today.comment || '—'}</div>
+      </div>
+    `;
+    renderAlerts(today);
+  }
+
+  function renderStats(stats) {
+    if (!stats || !stats.min) {
+      statsEl.innerHTML = '';
+      return;
+    }
+    const trendClass = stats.trend === 'rast' ? 'positive' : stats.trend === 'pokles' ? 'negative' : 'neutral';
+    statsEl.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">Minimum</div>
+        <div class="stat-value">${stats.min} %</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Maximum</div>
+        <div class="stat-value">${stats.max} %</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Priemer</div>
+        <div class="stat-value">${stats.avg} %</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Priem. denná zmena</div>
+        <div class="stat-value ${getDeltaColor(stats.avg_delta)}">${stats.avg_delta !== null ? (stats.avg_delta > 0 ? '+' : '') + stats.avg_delta.toFixed(2) : '—'} p.b.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Celková zmena</div>
+        <div class="stat-value ${trendClass}">${stats.total_change !== null ? (stats.total_change > 0 ? '+' : '') + stats.total_change.toFixed(2) : '—'} p.b.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Trend</div>
+        <div class="stat-value ${trendClass}">${stats.trend || '—'}</div>
       </div>
     `;
   }
@@ -203,30 +296,71 @@ INDEX_HTML = Template("""<!doctype html>
       return;
     }
     // Zobrazíme záznamy v opačnom poradí (od najnovšieho po najstarší) pre tabuľku
-    const reversedRecords = [...records].reverse();
+    let reversedRecords = [...records].reverse();
+    
+    // Triedenie
+    if (state.sortCol) {
+      reversedRecords.sort((a, b) => {
+        let valA, valB;
+        if (state.sortCol === 'date') {
+          valA = a.date.split('.').reverse().join('');
+          valB = b.date.split('.').reverse().join('');
+        } else if (state.sortCol === 'percent') {
+          valA = a.percent;
+          valB = b.percent;
+        } else if (state.sortCol === 'delta') {
+          valA = a.delta === null ? -999 : a.delta;
+          valB = b.delta === null ? -999 : b.delta;
+        }
+        const cmp = valA > valB ? 1 : valA < valB ? -1 : 0;
+        return state.sortDir === 'asc' ? cmp : -cmp;
+      });
+    }
+    
+    const todayDate = reversedRecords[0]?.date;
+    const sortClass = (col) => state.sortCol === col ? `sort-${state.sortDir}` : '';
+    
     tableEl.innerHTML = `
       <table style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Dátum</th>
-            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Naplnenie (%)</th>
-            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Denná zmena</th>
+            <th class="${sortClass('date')}" data-col="date" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Dátum</th>
+            <th class="${sortClass('percent')}" data-col="percent" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Naplnenie (%)</th>
+            <th class="${sortClass('delta')}" data-col="delta" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Denná zmena</th>
           </tr>
         </thead>
         <tbody>
-          ${reversedRecords.map(r=>`
-            <tr>
+          ${reversedRecords.map((r, idx) => {
+            const isToday = idx === 0 && r.date === todayDate;
+            const deltaClass = getDeltaColor(r.delta);
+            return `
+            <tr ${isToday ? 'class="current-date"' : ''}>
               <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.date}</td>
               <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
-              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.delta==null?'—':r.delta.toFixed(2)}</td>
+              <td class="${deltaClass}" style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.delta==null?'—':r.delta.toFixed(2)}</td>
             </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
     `;
+    
+    // Bind sort handlers
+    tableEl.querySelectorAll('th[data-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (state.sortCol === col) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortCol = col;
+          state.sortDir = 'desc';
+        }
+        renderTable(records);
+      });
+    });
   }
 
-  function drawChart(records, prev, hoverIdx=null){
+  function drawChart(records, prev, hoverIdx=null, yearsData={}){
     const cssW = chartEl.clientWidth || 980;
     const cssH = 320;
     const dpi = window.devicePixelRatio || 1;
@@ -243,16 +377,83 @@ INDEX_HTML = Template("""<!doctype html>
 
     const cur = records.map(r=>r.percent);
     const ref = (prev||[]).map(r=>r.percent);
+    
+    // Pripravíme dáta pre ďalšie roky
+    const currentYear = new Date().getFullYear();
+    const yearColors = [
+      {key: `year_${currentYear-2}`, color: '#10b981', name: String(currentYear-2)},
+      {key: `year_${currentYear-3}`, color: '#f59e0b', name: String(currentYear-3)},
+      {key: `year_${currentYear-4}`, color: '#ef4444', name: String(currentYear-4)}
+    ];
+    const yearsPercent = {};
+    Object.keys(yearsData || {}).forEach(key => {
+      yearsPercent[key] = (yearsData[key] || []).map(r => r.percent);
+    });
 
-    const max = Math.max(...cur, ...(ref.length?ref:[-Infinity]));
-    const min = Math.min(...cur, ...(ref.length?ref:[Infinity]));
+    // Vypočítame min/max pre všetky roky
+    const allValues = [...cur, ...(ref.length?ref:[]), ...Object.values(yearsPercent).flat()];
+    const max = Math.max(...allValues, -Infinity);
+    const min = Math.min(...allValues, Infinity);
+    const range = max - min;
+    const padding = range * 0.1; // 10% padding
+    const chartMax = max + padding;
+    const chartMin = Math.max(0, min - padding);
 
-    const left=40, right=10, top=10, bottom=30;
+    const left=50, right=20, top=30, bottom=50;
     const nx = cur.length;
     const X = (i,n)=> left + i*((W-left-right)/Math.max(1,n-1));
-    const Y = v => top + (H-top-bottom) * (1 - ((v-min)/Math.max(1,(max-min))));
+    const Y = v => top + (H-top-bottom) * (1 - ((v-chartMin)/Math.max(1,(chartMax-chartMin))));
 
-    state.scale = {left,right,top,bottom,W,H,min,max, nx, X:(i)=>X(i,nx), Y};
+    state.scale = {left,right,top,bottom,W,H,min:chartMin,max:chartMax, nx, X:(i)=>X(i,nx), Y};
+
+    // Grid lines a Y-os
+    g.strokeStyle = "#e5e7eb";
+    g.lineWidth = 1;
+    g.font = "11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    g.fillStyle = "#6b7280";
+    g.textAlign = "right";
+    g.textBaseline = "middle";
+    
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i++) {
+      const val = chartMin + (chartMax - chartMin) * (i / yTicks);
+      const y = Y(val);
+      g.beginPath();
+      g.moveTo(left, y);
+      g.lineTo(W - right, y);
+      g.stroke();
+      g.fillText(val.toFixed(1) + '%', left - 8, y);
+    }
+
+    // X-os s dátumami
+    g.textAlign = "center";
+    g.textBaseline = "top";
+    const dateStep = Math.max(1, Math.floor(nx / 6));
+    for (let i = 0; i < nx; i += dateStep) {
+      const x = X(i, nx);
+      const date = records[i]?.date || '';
+      if (date) {
+        g.fillText(date, x, H - bottom + 8);
+        g.beginPath();
+        g.moveTo(x, H - bottom);
+        g.lineTo(x, H - bottom + 4);
+        g.stroke();
+      }
+    }
+
+    // Hlavná X-os čiara
+    g.strokeStyle="#e5e7eb";
+    g.lineWidth = 2;
+    g.beginPath(); 
+    g.moveTo(left, H-bottom); 
+    g.lineTo(W-right, H-bottom); 
+    g.stroke();
+
+    // Y-os čiara
+    g.beginPath();
+    g.moveTo(left, top);
+    g.lineTo(left, H-bottom);
+    g.stroke();
 
     function line(data, dashed, color){
       if(!data.length) return;
@@ -269,9 +470,51 @@ INDEX_HTML = Template("""<!doctype html>
       g.restore();
     }
 
-    g.strokeStyle="#e5e7eb";
-    g.beginPath(); g.moveTo(left,H-bottom); g.lineTo(W-right,H-bottom); g.stroke();
+    // Predpoveď trendu (lineárna regresia na posledných 7 dňoch)
+    if (cur.length >= 7) {
+      const last7 = cur.slice(-7);
+      const n = last7.length;
+      const sumX = (n * (n - 1)) / 2;
+      const sumY = last7.reduce((a, b) => a + b, 0);
+      const sumXY = last7.reduce((sum, y, i) => sum + i * y, 0);
+      const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+      
+      // Predpoveď na ďalšie 3 dni
+      const forecast = [];
+      for (let i = 0; i < 3; i++) {
+        const futureVal = intercept + slope * (n + i);
+        if (futureVal >= chartMin && futureVal <= chartMax) {
+          forecast.push(futureVal);
+        }
+      }
+      
+      if (forecast.length > 0) {
+        g.save();
+        g.strokeStyle = "#8b5cf6";
+        g.lineWidth = 2;
+        g.setLineDash([4, 4]);
+        g.beginPath();
+        const lastX = X(nx - 1, nx);
+        const lastY = Y(cur[cur.length - 1]);
+        g.moveTo(lastX, lastY);
+        forecast.forEach((val, i) => {
+          const x = X(nx + i, nx + forecast.length);
+          const y = Y(val);
+          g.lineTo(x, y);
+        });
+        g.stroke();
+        g.restore();
+      }
+    }
 
+    // Zobrazíme všetky roky
+    yearColors.forEach(({key, color}) => {
+      if (yearsPercent[key] && yearsPercent[key].length > 0) {
+        line(yearsPercent[key], true, color);
+      }
+    });
     if(ref.length) line(ref, true, "#9ec5fe");
     line(cur, false, "#2563eb");
 
@@ -298,13 +541,15 @@ INDEX_HTML = Template("""<!doctype html>
       }
 
       const date = records[hoverIdx].date;
-      const line1 = `${new Date().getFullYear()}: ${vCur.toFixed(2)} %`;
-      const line2 = (vPrev!=null) ? `${new Date().getFullYear()-1}: ${vPrev.toFixed(2)} %` : '';
+      const currentYear = new Date().getFullYear();
+      const line1 = `${currentYear}: ${vCur.toFixed(2)} %`;
+      const line2 = (vPrev!=null) ? `${currentYear-1}: ${vPrev.toFixed(2)} %` : '';
       const pad = 6;
       g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      g.textAlign = "left";
       const w1 = g.measureText(`${date}`).width;
       const w2 = g.measureText(line1).width;
-      const w3 = g.measureText(line2).width;
+      const w3 = vPrev!=null ? g.measureText(line2).width : 0;
       const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
       const lineH = 16;
       const lines = (vPrev!=null) ? 3 : 2;
@@ -319,33 +564,82 @@ INDEX_HTML = Template("""<!doctype html>
       g.fillText(line1, lx+pad, ty); ty += lineH;
       if(vPrev!=null) g.fillText(line2, lx+pad, ty);
     }
+    
+    // Legenda
+    const currentYear = new Date().getFullYear();
+    const legendItems = [
+      `<div class="legend-item">
+        <div class="legend-line" style="background:#2563eb;"></div>
+        <span>${currentYear}</span>
+      </div>`
+    ];
+    if(ref.length > 0) {
+      legendItems.push(`
+      <div class="legend-item">
+        <div class="legend-dash" style="color:#9ec5fe;"></div>
+        <span>${currentYear-1}</span>
+      </div>`);
+    }
+    yearColors.forEach(({key, color, name}) => {
+      if (yearsPercent[key] && yearsPercent[key].length > 0) {
+        legendItems.push(`
+        <div class="legend-item">
+          <div class="legend-dash" style="color:${color};"></div>
+          <span>${name}</span>
+        </div>`);
+      }
+    });
+    if(cur.length >= 7) {
+      legendItems.push(`
+      <div class="legend-item">
+        <div class="legend-dash" style="color:#8b5cf6;"></div>
+        <span>Predpoveď</span>
+      </div>`);
+    }
+    legendEl.innerHTML = legendItems.join('');
   }
 
   async function fetchToday(){
-    const r = await fetch('/api/today', {cache:'no-store'});
-    if(!r.ok){ cardsEl.innerHTML = '<div class="muted">Komentár sa nepodarilo načítať.</div>'; return; }
-    const j = await r.json();
-    renderCards(j);
+    showLoading(true);
+    try {
+      const r = await fetch('/api/today', {cache:'no-store'});
+      if(!r.ok){ cardsEl.innerHTML = '<div class="muted">Komentár sa nepodarilo načítať.</div>'; return; }
+      const j = await r.json();
+      renderCards(j);
+    } finally {
+      showLoading(false);
+    }
   }
 
   async function fetchHistory(days){
-    const key = String(days);
-    if(cache.has(key)){
-      const data = cache.get(key);
+    showLoading(true);
+    try {
+      const key = String(days);
+      if(cache.has(key)){
+        const data = cache.get(key);
+        state.records = data.records;
+        state.prev    = data.prev_year || [];
+        state.stats   = data.stats || {};
+        state.yearsData = data.years_data || {};
+        drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        renderTable(state.records);
+        renderStats(state.stats);
+        return;
+      }
+      const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
+      if(!r.ok){ showMsg(`HTTP ${r.status}`); return; }
+      const data = await r.json();
+      cache.set(key, data);
       state.records = data.records;
       state.prev    = data.prev_year || [];
-      drawChart(state.records, state.prev, state.hoverIdx);
+      state.stats   = data.stats || {};
+      state.yearsData = data.years_data || {};
+      drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
       renderTable(state.records);
-      return;
+      renderStats(state.stats);
+    } finally {
+      showLoading(false);
     }
-    const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
-    if(!r.ok){ showMsg(`HTTP ${r.status}`); return; }
-    const data = await r.json();
-    cache.set(key, data);
-    state.records = data.records;
-    state.prev    = data.prev_year || [];
-    drawChart(state.records, state.prev, state.hoverIdx);
-    renderTable(state.records);
   }
 
   function bindExport(){
@@ -359,6 +653,15 @@ INDEX_HTML = Template("""<!doctype html>
       btnXls.addEventListener('click', ()=>{
         const d = Number(rangeEl.value || 30);
         window.location.href = `/api/export?fmt=xlsx&days=${encodeURIComponent(d)}`;
+      });
+    }
+    if(btnChartPng){
+      btnChartPng.addEventListener('click', ()=>{
+        const url = chartEl.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `powergy-graf-${new Date().toISOString().split('T')[0]}.png`;
+        a.click();
       });
     }
   }
@@ -487,7 +790,7 @@ def api_history(days: int = 30):
         rows = list(reversed(q.all()))  # Zoradené od najstaršieho po najnovší (pre graf)
 
         if not rows:
-            resp = JSONUTF8Response({"records": [], "prev_year": []})
+            resp = JSONUTF8Response({"records": [], "prev_year": [], "stats": {}})
             resp.headers["Cache-Control"] = "public, max-age=30"
             return resp
 
@@ -496,6 +799,18 @@ def api_history(days: int = 30):
             "percent": round(float(_to_float(r.percent)), 2),
             "delta": None if r.delta is None else round(float(_to_float(r.delta)), 2),
         } for r in rows]
+
+        # Vypočítaj štatistiky
+        percents = [r["percent"] for r in records]
+        deltas = [r["delta"] for r in records if r["delta"] is not None]
+        stats = {
+            "min": round(min(percents), 2) if percents else None,
+            "max": round(max(percents), 2) if percents else None,
+            "avg": round(sum(percents) / len(percents), 2) if percents else None,
+            "avg_delta": round(sum(deltas) / len(deltas), 2) if deltas else None,
+            "total_change": round(records[-1]["percent"] - records[0]["percent"], 2) if len(records) > 1 else None,
+            "trend": "rast" if (records[-1]["percent"] > records[0]["percent"]) else "pokles" if len(records) > 1 else "stabilný"
+        }
 
         start_prev = rows[0].date - TD(days=365)
         end_prev   = rows[-1].date - TD(days=365)
@@ -518,7 +833,27 @@ def api_history(days: int = 30):
             else:
                 prev_year.append({"date": _format_date(key), "percent": baseline})
 
-        resp = JSONUTF8Response({"records": records, "prev_year": prev_year})
+        # Sezónne porovnanie - pridať dáta pre predchádzajúce roky (2023, 2022, atď.)
+        years_data = {}
+        current_year = rows[0].date.year if rows else dt.date.today().year
+        for year_offset in range(2, 5):  # 2023, 2022, 2021
+            year_key = f"year_{current_year - year_offset}"
+            year_rows = []
+            for r in rows:
+                key = r.date - TD(days=365 * year_offset)
+                prev_rows_year = (
+                    sess.query(GasStorageDaily)
+                    .filter(GasStorageDaily.date == key)
+                    .first()
+                )
+                if prev_rows_year:
+                    year_rows.append({"date": _format_date(key), "percent": round(float(_to_float(prev_rows_year.percent)), 2)})
+                else:
+                    year_rows.append({"date": _format_date(key), "percent": baseline})
+            if year_rows:
+                years_data[year_key] = year_rows
+
+        resp = JSONUTF8Response({"records": records, "prev_year": prev_year, "stats": stats, "years_data": years_data})
         resp.headers["Cache-Control"] = "public, max-age=30"
         return resp
 
