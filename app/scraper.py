@@ -190,8 +190,8 @@ def run_daily_agsi():
         today = dt.date.today()
         start_date = last_date + dt.timedelta(days=1)
         
-        # Ak je posledný dátum starší ako 7 dní, použijeme backfill
-        if (today - last_date).days > 7:
+        # Ak je posledný dátum starší ako 2 dni, použijeme backfill
+        if (today - last_date).days > 2:
             print(f"Last date in DB is {last_date}, using backfill from {start_date}")
             try:
                 result = backfill_agsi(str(start_date))
