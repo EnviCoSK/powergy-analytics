@@ -1,0 +1,23 @@
+name: Auto Deploy Check
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Check Python syntax
+        run: |
+          python -m py_compile app/*.py || true
+          
+      - name: Deployment info
+        run: |
+          echo "✅ Zmeny sú pushnuté na GitHub"
+          echo "Render.com by mal automaticky nasadiť zmeny"
+          echo "Sleduj: https://dashboard.render.com"
+

@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-dotenv
+openai>=1.37.0
+playwright
+pydantic
+jinja2
+requests
+openpyxl
+orjson

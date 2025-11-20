@@ -1,0 +1,1 @@
+Pozri návod v chate – postup pre GitHub + Render krok za krokom.
