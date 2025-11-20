@@ -211,16 +211,18 @@ def run_daily_agsi():
                 import traceback
                 traceback.print_exc()
         
-        # Skúsime najnovšie dáta (dnes, včera, predvčerom)
+        # AGSI API má oneskorenie - dáta pre dnešok ešte nemusia byť dostupné
+        # Skúsime najnovšie dáta od včerajška dozadu
+        yesterday = today - dt.timedelta(days=1)
         candidates = []
-        for i in range(5):  # Skúsime až 5 dní dozadu
+        for i in range(1, 6):  # Skúsime včera až 5 dní dozadu (nie dnes!)
             candidate = today - dt.timedelta(days=i)
             if candidate >= start_date:
                 candidates.append(str(candidate))
         
-        # Ak nemáme žiadne kandidáty, použijeme aspoň posledných 5 dní
+        # Ak nemáme žiadne kandidáty, použijeme aspoň posledných 5 dní (od včerajška)
         if not candidates:
-            for i in range(5):
+            for i in range(1, 6):
                 candidates.append(str(today - dt.timedelta(days=i)))
         
         picked_date = None
