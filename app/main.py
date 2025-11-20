@@ -202,6 +202,8 @@ INDEX_HTML = Template("""<!doctype html>
       tableEl.innerHTML = '<div class="muted">Žiadne záznamy</div>';
       return;
     }
+    // Zobrazíme záznamy v opačnom poradí (od najnovšieho po najstarší) pre tabuľku
+    const reversedRecords = [...records].reverse();
     tableEl.innerHTML = `
       <table style="width:100%; border-collapse:collapse;">
         <thead>
@@ -212,7 +214,7 @@ INDEX_HTML = Template("""<!doctype html>
           </tr>
         </thead>
         <tbody>
-          ${records.map(r=>`
+          ${reversedRecords.map(r=>`
             <tr>
               <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.date}</td>
               <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
@@ -482,7 +484,7 @@ def api_history(days: int = 30):
     sess = SessionLocal()
     try:
         q = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).limit(days)
-        rows = q.all()  # Už sú zoradené od najnovšieho po najstarší
+        rows = list(reversed(q.all()))  # Zoradené od najstaršieho po najnovší (pre graf)
 
         if not rows:
             resp = JSONUTF8Response({"records": [], "prev_year": []})
