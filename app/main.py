@@ -908,7 +908,28 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
         if row:
             row.percent = picked_full
             row.delta = delta
-            # komentár necháme tak; vygeneruje ho /api/refresh-comment
+            # Ak komentár chýba, vygenerujeme ho
+            if not row.comment or not str(row.comment).strip():
+                # Vypočítaj trend7 a yoy_gap pre komentár
+                trend7 = 0.0
+                yoy_gap = 0.0
+                try:
+                    week_ago = d - dt.timedelta(days=7)
+                    week_ago_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == week_ago).first()
+                    if week_ago_row and week_ago_row.percent is not None:
+                        trend7 = round(picked_full - _to_float(week_ago_row.percent), 2)
+                    
+                    try:
+                        prev_year_date = d.replace(year=d.year - 1)
+                    except ValueError:
+                        prev_year_date = d - dt.timedelta(days=365)
+                    prev_year_row = sess.query(GasStorageDaily).filter(GasStorageDaily.date == prev_year_date).first()
+                    if prev_year_row and prev_year_row.percent is not None:
+                        yoy_gap = round(picked_full - _to_float(prev_year_row.percent), 2)
+                except Exception:
+                    pass
+                
+                row.comment = generate_comment_safe(picked_full, delta, yoy_gap, trend7)
         else:
             sess.add(GasStorageDaily(date=d, percent=picked_full, delta=delta, comment=None))
 

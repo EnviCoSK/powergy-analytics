@@ -343,18 +343,22 @@ def backfill_agsi(from_date: str = "2025-01-01"):
         # Commitneme aj ak sa nič nezmenilo (pre istotu)
         sess.commit()
         
-        # Po commite vypočítame delty pre nové/aktualizované záznamy
+        # Po commite vypočítame delty pre všetky záznamy od from_date
         # Vypočítame delty aj ak sme len overili existujúce záznamy
         if len(rows) > 0:
             try:
-                # Vypočítame delty pre záznamy, ktoré sme pridal/aktualizovali
+                # Vypočítame delty pre záznamy od from_date (vrátane predchádzajúceho dňa pre správny výpočet)
                 from sqlalchemy import text
+                start_date_obj = dt.date.fromisoformat(from_date)
+                # Potrebujeme aj predchádzajúci deň pre správny výpočet delty
+                prev_day = start_date_obj - dt.timedelta(days=1)
+                
                 sess.execute(text("""
                     WITH lagged AS (
                       SELECT date,
                              LAG(percent) OVER (ORDER BY date) AS lag_percent
                       FROM gas_storage_daily
-                      WHERE date >= :start_date
+                      WHERE date >= :prev_day
                     )
                     UPDATE gas_storage_daily g
                        SET delta = CASE
@@ -364,10 +368,13 @@ def backfill_agsi(from_date: str = "2025-01-01"):
                       FROM lagged l
                      WHERE l.date = g.date
                        AND g.date >= :start_date
-                """), {"start_date": dt.date.fromisoformat(from_date)})
+                """), {"start_date": start_date_obj, "prev_day": prev_day})
                 sess.commit()
+                print(f"Updated deltas for dates >= {from_date}")
             except Exception as e:
                 print(f"Warning: Failed to update deltas: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Vrátime informáciu aj o tom, koľko záznamov už existovalo
         existing_count = len(rows) - inserted - updated
