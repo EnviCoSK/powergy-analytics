@@ -582,6 +582,36 @@ def api_export(fmt: str = "csv", days: int = 30):
 
 
 # ---------------------------- Comments ----------------------------
+@app.api_route("/api/backfill-agsi", methods=["GET", "POST"], response_class=JSONUTF8Response)
+def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, použije posledný dátum v DB + 1 deň")):
+    """
+    Manuálne spustenie backfillu dát z AGSI API.
+    Stiahne všetky dáta od from_date (alebo od posledného dátumu v DB) po dnes.
+    """
+    if not os.getenv("AGSI_API_KEY"):
+        return JSONUTF8Response({"ok": False, "error": "AGSI_API_KEY missing"}, status_code=400)
+    
+    sess = SessionLocal()
+    try:
+        if from_date:
+            start_date = from_date
+        else:
+            # Zistíme posledný dátum v DB
+            last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+            if last_row:
+                start_date = str(last_row.date + dt.timedelta(days=1))
+            else:
+                start_date = "2025-01-01"
+        
+        from .scraper import backfill_agsi
+        result = backfill_agsi(start_date)
+        return {"ok": True, "from_date": start_date, **result}
+    except Exception as e:
+        return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        sess.close()
+
+
 @app.post("/api/backfill-comments", response_class=JSONUTF8Response)
 def backfill_comments(limit: int = 60, force: bool = False):
     """Fill missing comments for last N rows; if force=True, overwrite all (CAREFUL with tokens)."""
@@ -670,7 +700,7 @@ def api_refresh_comment(force: bool = Query(False, description="Ak true, prepí�
         row.comment = generate_comment_safe(current or 0.0, delta, yoy_gap, trend7)
         sess.commit()
 
-        return {"ok": True, "date": str(row.date), "percent": current, "delta": delta, "yoy_gap": yoy_gap}
+        return {"ok": True, "date": str(row.date), "percent": current, "delta": delta, "yoy_gap": yoy_gap, "trend7": trend7}
     except Exception as e:
         sess.rollback()
         return JSONUTF8Response({"ok": False, "error": str(e)}, status_code=500)
@@ -815,6 +845,20 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
             candidates = [date]
         else:
             today = dt.date.today()
+            days_missing = (today - last_date).days
+            
+            # Ak je posledný dátum starší ako 2 dni, použijeme backfill
+            if days_missing > 2:
+                from .scraper import backfill_agsi
+                try:
+                    start_date = last_date + dt.timedelta(days=1)
+                    result = backfill_agsi(str(start_date))
+                    # Po backfille aktualizujeme last_date
+                    last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+                    last_date = last_row.date if last_row else last_date
+                except Exception as e:
+                    pass  # Pokračujeme s jednotlivými dňami
+            
             # Skúsime až 5 dní dozadu, aby sme našli najnovšie dostupné dáta
             for i in range(5):
                 candidate = today - dt.timedelta(days=i)

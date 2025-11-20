@@ -188,18 +188,20 @@ def run_daily_agsi():
         
         # Skúsime stiahnuť dáta od posledného dátumu + 1 deň až po dnes
         today = dt.date.today()
-        start_date = last_date + dt.timedelta(days=1)
+        days_missing = (today - last_date).days
         
         # Ak je posledný dátum starší ako 2 dni, použijeme backfill
-        if (today - last_date).days > 2:
-            print(f"Last date in DB is {last_date}, using backfill from {start_date}")
+        if days_missing > 2:
+            print(f"Last date in DB is {last_date} ({days_missing} days ago), using backfill from {last_date + dt.timedelta(days=1)}")
             try:
+                start_date = last_date + dt.timedelta(days=1)
                 result = backfill_agsi(str(start_date))
                 print(f"Backfill result: {result}")
+                # Po backfille aktualizujeme last_date
+                last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
+                last_date = last_row.date if last_row else last_date
             except Exception as e:
                 print(f"Backfill failed: {e}, continuing with single day fetch")
-            # Po backfille skúsime ešte dnes
-            start_date = today
         
         # Skúsime najnovšie dáta (dnes, včera, predvčerom)
         candidates = []
