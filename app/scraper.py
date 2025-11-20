@@ -324,12 +324,15 @@ def backfill_agsi(from_date: str = "2025-01-01"):
             # Použijeme cache existujúcich dátumov
             rec = existing_dates.get(d_obj)
             if rec:
-                # Aktualizujeme aj ak sa hodnota nezmenila (pre istotu)
+                # Aktualizujeme vždy, aj ak sa hodnota nezmenila (pre istotu)
                 old_percent = rec.percent
                 rec.percent = p_val
                 # Počítame ako update len ak sa hodnota skutočne zmenila
-                if old_percent != p_val:
+                if abs(old_percent - p_val) > 0.001:  # Použijeme malú toleranciu pre float porovnanie
                     updated += 1
+                else:
+                    # Záznam už existuje s rovnakou hodnotou - stále to počítame ako "processed"
+                    pass
             else:
                 # Nový záznam - pridáme do session a do cache
                 new_rec = GasStorageDaily(date=d_obj, percent=p_val, delta=None, comment=None)
@@ -337,9 +340,12 @@ def backfill_agsi(from_date: str = "2025-01-01"):
                 existing_dates[d_obj] = new_rec  # Pridáme do cache, aby sme zabránili duplikátom
                 inserted += 1
 
+        # Commitneme aj ak sa nič nezmenilo (pre istotu)
         sess.commit()
+        
         # Po commite vypočítame delty pre nové/aktualizované záznamy
-        if inserted > 0 or updated > 0:
+        # Vypočítame delty aj ak sme len overili existujúce záznamy
+        if len(rows) > 0:
             try:
                 # Vypočítame delty pre záznamy, ktoré sme pridal/aktualizovali
                 from sqlalchemy import text
@@ -363,7 +369,16 @@ def backfill_agsi(from_date: str = "2025-01-01"):
             except Exception as e:
                 print(f"Warning: Failed to update deltas: {e}")
         
-        return {"inserted": inserted, "updated": updated, "source_count": len(rows)}
+        # Vrátime informáciu aj o tom, koľko záznamov už existovalo
+        existing_count = len(rows) - inserted - updated
+        
+        return {
+            "inserted": inserted, 
+            "updated": updated, 
+            "source_count": len(rows),
+            "already_exists": existing_count,
+            "processed": inserted + updated + existing_count
+        }
     except Exception as e:
         sess.rollback()
         raise RuntimeError(f"Backfill failed: {str(e)}") from e
