@@ -667,8 +667,10 @@ INDEX_HTML = Template("""<!doctype html>
         line(refActual, true, "#9ec5fe");
       }
     }
-    // Aktuálny rok 2025 - len skutočné dáta (do dnes), nie budúce
+    // Aktuálny rok 2025 - len skutočné dáta (do posledného dostupného dátumu z AGSI), nie budúce
+    // Použijeme len `cur`, ktorý obsahuje len `actualRecords` (už filtrované)
     if(cur.length > 0) {
+      // Vykreslíme modrú čiaru len pre skutočné dáta
       line(cur, false, "#2563eb");
     }
 
@@ -1000,7 +1002,10 @@ INDEX_HTML = Template("""<!doctype html>
       const xCss = px / dpi;
       const {left, right, W, nx} = state.scale;
       if(xCss < left || xCss > (W-right)){
-        state.hoverIdx = null; drawChart(state.records, state.prev, null, state.yearsData); return;
+        state.hoverIdx = null; 
+        const todayDate = state.today || null;
+        drawChart(state.records, state.prev, null, state.yearsData, todayDate); 
+        return;
       }
       const usable = (W-left-right);
       const t = (xCss - left) / Math.max(1, usable);
@@ -1143,17 +1148,17 @@ def api_history(days: int = 30):
             resp.headers["Cache-Control"] = "public, max-age=30"
             return resp
 
-        # Zistíme aktuálny dátum (dnes) pre obmedzenie zobrazenia
-        today = dt.date.today()
-        today_str = _format_date(today)
-        
         records = [{
             "date": _format_date(r.date),
             "percent": round(float(_to_float(r.percent)), 2),
             "delta": None if r.delta is None else round(float(_to_float(r.delta)), 2),
         } for r in rows]
 
-        # Vypočítaj štatistiky len pre skutočné dáta (do dnes)
+        # Zistíme posledný dátum v DB (nie dnes, ale posledný dostupný dátum z AGSI)
+        last_date_in_db = rows[-1].date if rows else None
+        today_str = _format_date(last_date_in_db) if last_date_in_db else _format_date(dt.date.today())
+        
+        # Vypočítaj štatistiky len pre skutočné dáta (do posledného dátumu v DB)
         actual_records = [r for r in records if r["date"] <= today_str]
         percents = [r["percent"] for r in actual_records] if actual_records else [r["percent"] for r in records]
         deltas = [r["delta"] for r in actual_records if r["delta"] is not None] if actual_records else [r["delta"] for r in records if r["delta"] is not None]
