@@ -415,8 +415,9 @@ INDEX_HTML = Template("""<!doctype html>
     const nx = cur.length;
     const X = (i,n)=> left + i*((W-left-right)/Math.max(1,n-1));
     const Y = v => top + (H-top-bottom) * (1 - ((v-chartMin)/Math.max(1,(chartMax-chartMin))));
-
-    state.scale = {left,right,top,bottom,W,H,min:chartMin,max:chartMax, nx, X:(i)=>X(i,nx), Y};
+    
+    // Počiatočný scale (bude aktualizovaný po výpočte predpovede)
+    let totalDays = nx;
 
     // Grid lines a Y-os
     g.strokeStyle = "#e5e7eb";
@@ -437,29 +438,8 @@ INDEX_HTML = Template("""<!doctype html>
       g.fillText(val.toFixed(1) + '%', left - 8, y);
     }
 
-    // X-os s dátumami
-    g.textAlign = "center";
-    g.textBaseline = "top";
-    const dateStep = Math.max(1, Math.floor(nx / 6));
-    for (let i = 0; i < nx; i += dateStep) {
-      const x = X(i, nx);
-      const date = records[i]?.date || '';
-      if (date) {
-        g.fillText(date, x, H - bottom + 8);
-        g.beginPath();
-        g.moveTo(x, H - bottom);
-        g.lineTo(x, H - bottom + 4);
-        g.stroke();
-      }
-    }
-
-    // Hlavná X-os čiara
-    g.strokeStyle="#e5e7eb";
-    g.lineWidth = 2;
-    g.beginPath(); 
-    g.moveTo(left, H-bottom); 
-    g.lineTo(W-right, H-bottom); 
-    g.stroke();
+    // X-os s dátumami - zobrazíme len pred výpočtom predpovede (budeme aktualizovať neskôr)
+    // Túto časť presunieme po výpočte predpovede
 
     // Y-os čiara
     g.beginPath();
@@ -482,8 +462,12 @@ INDEX_HTML = Template("""<!doctype html>
       g.restore();
     }
 
-    // Predpoveď trendu (lineárna regresia na posledných 7 dňoch)
-    if (cur.length >= 7) {
+    // Predpoveď trendu (lineárna regresia na posledných 7 dňoch) až do konca mesiaca
+    let forecastDates = [];
+    let forecastValues = [];
+    let totalDays = nx; // Počet dní v grafe vrátane predpovede
+    
+    if (cur.length >= 7 && records.length > 0) {
       const last7 = cur.slice(-7);
       const n = last7.length;
       const sumX = (n * (n - 1)) / 2;
@@ -493,33 +477,90 @@ INDEX_HTML = Template("""<!doctype html>
       const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
       const intercept = (sumY - slope * sumX) / n;
       
-      // Predpoveď na ďalšie 3 dni
-      const forecast = [];
-      for (let i = 0; i < 3; i++) {
-        const futureVal = intercept + slope * (n + i);
-        if (futureVal >= chartMin && futureVal <= chartMax) {
-          forecast.push(futureVal);
+      // Zistíme posledný dátum a koniec mesiaca
+      const lastDateStr = records[records.length - 1].date; // Formát: "DD.MM.YYYY"
+      const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
+      const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
+      
+      // Koniec aktuálneho mesiaca
+      const endOfMonth = new Date(lastYear, lastMonth, 0); // Deň 0 = posledný deň predchádzajúceho mesiaca
+      const endOfMonthDate = new Date(lastYear, lastMonth - 1, endOfMonth.getDate());
+      
+      // Počet dní od posledného dátumu do konca mesiaca
+      const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDate) / (1000 * 60 * 60 * 24));
+      
+      if (daysToEndOfMonth > 0) {
+        // Vytvoríme dátumy a hodnoty predpovede
+        forecastDates = [];
+        forecastValues = [];
+        
+        for (let i = 1; i <= daysToEndOfMonth; i++) {
+          const forecastDate = new Date(lastDate);
+          forecastDate.setDate(forecastDate.getDate() + i);
+          
+          // Formát dátum ako "DD.MM.YYYY"
+          const day = String(forecastDate.getDate()).padStart(2, '0');
+          const month = String(forecastDate.getMonth() + 1).padStart(2, '0');
+          const year = forecastDate.getFullYear();
+          forecastDates.push(`${day}.${month}.${year}`);
+          
+          // Vypočítame predpovedanú hodnotu
+          const futureVal = intercept + slope * (n + i - 1);
+          forecastValues.push(futureVal);
+        }
+        
+        totalDays = nx + forecastValues.length;
+        
+        // Vykreslíme predpoveď
+        if (forecastValues.length > 0) {
+          g.save();
+          g.strokeStyle = "#8b5cf6";
+          g.lineWidth = 2;
+          g.setLineDash([4, 4]);
+          g.beginPath();
+          const lastX = X(nx - 1, totalDays);
+          const lastY = Y(cur[cur.length - 1]);
+          g.moveTo(lastX, lastY);
+          
+          forecastValues.forEach((val, i) => {
+            const x = X(nx + i, totalDays);
+            const y = Y(val);
+            g.lineTo(x, y);
+          });
+          g.stroke();
+          g.restore();
         }
       }
-      
-      if (forecast.length > 0) {
-        g.save();
-        g.strokeStyle = "#8b5cf6";
-        g.lineWidth = 2;
-        g.setLineDash([4, 4]);
+    }
+    
+    // Aktualizujeme scale s novým počtom dní
+    state.scale = {left,right,top,bottom,W,H,min:chartMin,max:chartMax, nx:totalDays, X:(i)=>X(i,totalDays), Y};
+    
+    // X-os s dátumami - zobrazíme pre všetky dáta vrátane predpovede
+    g.textAlign = "center";
+    g.textBaseline = "top";
+    g.fillStyle = "#6b7280";
+    const allDates = [...records.map(r => r.date), ...forecastDates];
+    const dateStep = Math.max(1, Math.floor(totalDays / 6));
+    for (let i = 0; i < totalDays; i += dateStep) {
+      const x = X(i, totalDays);
+      const date = allDates[i] || '';
+      if (date) {
+        g.fillText(date, x, H - bottom + 8);
         g.beginPath();
-        const lastX = X(nx - 1, nx);
-        const lastY = Y(cur[cur.length - 1]);
-        g.moveTo(lastX, lastY);
-        forecast.forEach((val, i) => {
-          const x = X(nx + i, nx + forecast.length);
-          const y = Y(val);
-          g.lineTo(x, y);
-        });
+        g.moveTo(x, H - bottom);
+        g.lineTo(x, H - bottom + 4);
         g.stroke();
-        g.restore();
       }
     }
+    
+    // Hlavná X-os čiara - rozšírime ju na celú šírku
+    g.strokeStyle="#e5e7eb";
+    g.lineWidth = 2;
+    g.beginPath(); 
+    g.moveTo(left, H-bottom); 
+    g.lineTo(W-right, H-bottom); 
+    g.stroke();
 
     // Zobrazíme všetky roky
     yearColors.forEach(({key, color}) => {
@@ -530,11 +571,25 @@ INDEX_HTML = Template("""<!doctype html>
     if(ref.length) line(ref, true, "#9ec5fe");
     line(cur, false, "#2563eb");
 
-    if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<nx){
-      const x = X(hoverIdx,nx);
-      const vCur = cur[hoverIdx];
-      const hasPrev = Array.isArray(ref) && ref.length === nx;
-      const vPrev = hasPrev ? ref[hoverIdx] : null;
+    if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<totalDays){
+      const x = X(hoverIdx,totalDays);
+      // Pre predpoveď použijeme iné hodnoty
+      let vCur, vPrev, date, isForecast;
+      if (hoverIdx < nx) {
+        // Skutočné dáta
+        vCur = cur[hoverIdx];
+        const hasPrev = Array.isArray(ref) && ref.length === nx;
+        vPrev = hasPrev ? ref[hoverIdx] : null;
+        date = records[hoverIdx].date;
+        isForecast = false;
+      } else {
+        // Predpoveď
+        const forecastIdx = hoverIdx - nx;
+        vCur = forecastValues[forecastIdx];
+        vPrev = null;
+        date = forecastDates[forecastIdx];
+        isForecast = true;
+      }
 
       g.save();
       g.strokeStyle = "rgba(0,0,0,.15)";
@@ -543,28 +598,36 @@ INDEX_HTML = Template("""<!doctype html>
       g.restore();
 
       const yCur = Y(vCur);
-      g.fillStyle = "#2563eb";
+      if (isForecast) {
+        g.fillStyle = "#8b5cf6";
+      } else {
+        g.fillStyle = "#2563eb";
+      }
       g.beginPath(); g.arc(x,yCur,4,0,Math.PI*2); g.fill();
 
-      if(vPrev!=null){
+      if(vPrev!=null && !isForecast){
         const yPrev = Y(vPrev);
         g.fillStyle = "#9ec5fe";
         g.beginPath(); g.arc(x,yPrev,4,0,Math.PI*2); g.fill();
       }
 
-      const date = records[hoverIdx].date;
       const currentYear = new Date().getFullYear();
-      const line1 = `${currentYear}: ${vCur.toFixed(2)} %`;
-      const line2 = (vPrev!=null) ? `${currentYear-1}: ${vPrev.toFixed(2)} %` : '';
+      let line1, line2 = '';
+      if (isForecast) {
+        line1 = `Predpoveď: ${vCur.toFixed(2)} %`;
+      } else {
+        line1 = `${currentYear}: ${vCur.toFixed(2)} %`;
+        line2 = (vPrev!=null) ? `${currentYear-1}: ${vPrev.toFixed(2)} %` : '';
+      }
       const pad = 6;
       g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       g.textAlign = "left";
       const w1 = g.measureText(`${date}`).width;
       const w2 = g.measureText(line1).width;
-      const w3 = vPrev!=null ? g.measureText(line2).width : 0;
+      const w3 = line2 ? g.measureText(line2).width : 0;
       const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
       const lineH = 16;
-      const lines = (vPrev!=null) ? 3 : 2;
+      const lines = line2 ? 3 : 2;
       const boxH = lineH*lines + 6;
       const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
       const ly = Math.max(yCur - boxH - 10, top);
@@ -574,7 +637,7 @@ INDEX_HTML = Template("""<!doctype html>
       let ty = ly + 14;
       g.fillText(date, lx+pad, ty); ty += lineH;
       g.fillText(line1, lx+pad, ty); ty += lineH;
-      if(vPrev!=null) g.fillText(line2, lx+pad, ty);
+      if(line2) g.fillText(line2, lx+pad, ty);
     }
     
     // Legenda
