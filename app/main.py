@@ -389,7 +389,28 @@ INDEX_HTML = Template("""<!doctype html>
     g.clearRect(0,0,W,H);
     showMsg('');
 
-    // Zistíme aktuálny dátum (dnes) - buď z API alebo z posledného dátumu
+    // Pomocná funkcia na porovnanie dátumov v formáte DD.MM.YYYY
+    function parseDate(dateStr) {
+      const parts = dateStr.split('.');
+      if (parts.length !== 3) return null;
+      return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    }
+    
+    // Zistíme posledný dátum v dátach (nie dnes, ale posledný dostupný dátum)
+    let lastAvailableDate = null;
+    if (records.length > 0) {
+      // Zoradíme všetky dátumy a vezmeme posledný
+      const sortedDates = records.map(r => parseDate(r.date)).filter(d => d !== null).sort((a, b) => a - b);
+      if (sortedDates.length > 0) {
+        const lastDateObj = sortedDates[sortedDates.length - 1];
+        const day = String(lastDateObj.getDate()).padStart(2, '0');
+        const month = String(lastDateObj.getMonth() + 1).padStart(2, '0');
+        const year = lastDateObj.getFullYear();
+        lastAvailableDate = `${day}.${month}.${year}`;
+      }
+    }
+    
+    // Ak máme `today` z API, použijeme menší z týchto dátumov (posledný v dátach alebo dnes)
     let todayDate = today;
     if (!todayDate) {
       // Fallback: použijeme dnešný dátum
@@ -400,24 +421,25 @@ INDEX_HTML = Template("""<!doctype html>
       todayDate = `${day}.${month}.${year}`;
     }
     
-    // Pomocná funkcia na porovnanie dátumov v formáte DD.MM.YYYY
-    function parseDate(dateStr) {
-      const parts = dateStr.split('.');
-      if (parts.length !== 3) return null;
-      return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-    }
-    
+    // Použijeme posledný dátum v dátach ako maximálny dátum pre skutočné dáta
+    // Ak `today` z API je menší ako posledný dátum v dátach, použijeme `today`
     const todayDateObj = parseDate(todayDate);
+    const lastAvailableDateObj = lastAvailableDate ? parseDate(lastAvailableDate) : null;
     
-    // Rozdelíme dáta na skutočné (do dnes) a budúce
+    // Maximálny dátum pre skutočné dáta je menší z týchto dvoch dátumov
+    const maxActualDateObj = (lastAvailableDateObj && lastAvailableDateObj < todayDateObj) 
+      ? lastAvailableDateObj 
+      : todayDateObj;
+    
+    // Rozdelíme dáta na skutočné (do posledného dostupného dátumu) a budúce
     // Použijeme správne porovnanie dátumov, nie stringov
     const actualRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      return recordDateObj && recordDateObj <= todayDateObj;
+      return recordDateObj && recordDateObj <= maxActualDateObj;
     });
     const futureRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      return recordDateObj && recordDateObj > todayDateObj;
+      return recordDateObj && recordDateObj > maxActualDateObj;
     });
     
     const cur = actualRecords.map(r=>r.percent);
@@ -737,20 +759,30 @@ INDEX_HTML = Template("""<!doctype html>
       } else {
         // Zoradíme roky od najnovšieho po najstarší
         const sortedYears = Object.keys(hoverYearValues).sort((a, b) => {
-          const yearA = parseInt(a.replace('year_', '')) || parseInt(a);
-          const yearB = parseInt(b.replace('year_', '')) || parseInt(b);
-          return isNaN(yearA) || isNaN(yearB) ? 0 : (yearB - yearA);
+          // Čísla idú od najnovšieho po najstarší
+          const yearA = parseInt(a);
+          const yearB = parseInt(b);
+          if (!isNaN(yearA) && !isNaN(yearB)) {
+            return yearB - yearA;
+          }
+          // Ak nie je číslo, daj to na koniec
+          if (!isNaN(yearA)) return -1;
+          if (!isNaN(yearB)) return 1;
+          return 0;
         });
         
         sortedYears.forEach(yearKey => {
           const yearValue = hoverYearValues[yearKey];
-          const yearNum = parseInt(yearKey.replace('year_', ''));
+          const yearNum = parseInt(yearKey);
           if (!isNaN(yearNum)) {
             tooltipLines.push(`${yearNum}: ${yearValue.toFixed(2)} %`);
-          } else if (yearKey === 'predpoveď') {
-            tooltipLines.push(`Predpoveď: ${yearValue.toFixed(2)} %`);
           }
         });
+        
+        // Ak sme na poslednom bode skutočných dát, pridáme aj predpoveď pre tento dátum
+        if (hoverIdx === nx - 1 && forecastValues.length > 0) {
+          tooltipLines.push(`Predpoveď (zajtra): ${forecastValues[0].toFixed(2)} %`);
+        }
       }
       
       const pad = 6;
