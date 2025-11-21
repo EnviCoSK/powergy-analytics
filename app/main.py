@@ -220,7 +220,7 @@ INDEX_HTML = Template("""<!doctype html>
   }
 
   const cache = new Map();
-  let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {} };
+  let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {}, today: null };
 
   function showMsg(text){ document.getElementById('msg').textContent = text || ''; }
   function showLoading(show) {
@@ -367,7 +367,7 @@ INDEX_HTML = Template("""<!doctype html>
     });
   }
 
-  function drawChart(records, prev, hoverIdx=null, yearsData={}){
+  function drawChart(records, prev, hoverIdx=null, yearsData={}, today=null){
     if(!records || !records.length) {
       showMsg('Žiadne dáta pre graf');
       return;
@@ -389,8 +389,23 @@ INDEX_HTML = Template("""<!doctype html>
     g.clearRect(0,0,W,H);
     showMsg('');
 
-    const cur = records.map(r=>r.percent);
-    const ref = (prev||[]).map(r=>r.percent);
+    // Zistíme aktuálny dátum (dnes) - buď z API alebo z posledného dátumu
+    let todayDate = today;
+    if (!todayDate) {
+      // Fallback: použijeme dnešný dátum
+      const now = new Date();
+      const day = String(now.getDate()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const year = now.getFullYear();
+      todayDate = `${day}.${month}.${year}`;
+    }
+    
+    // Rozdelíme dáta na skutočné (do dnes) a budúce
+    const actualRecords = records.filter(r => r.date <= todayDate);
+    const futureRecords = records.filter(r => r.date > todayDate);
+    
+    const cur = actualRecords.map(r=>r.percent);
+    const ref = (prev||[]).slice(0, actualRecords.length).map(r=>r.percent);
     
     // Pripravíme dáta pre ďalšie roky
     const currentYear = new Date().getFullYear();
@@ -478,59 +493,67 @@ INDEX_HTML = Template("""<!doctype html>
         const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
         const intercept = (sumY - slope * sumX) / n;
         
-        // Zistíme posledný dátum a koniec mesiaca
-        const lastDateStr = records[records.length - 1].date; // Formát: "DD.MM.YYYY"
-        if (lastDateStr && lastDateStr.split('.').length === 3) {
-          const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
-          if (!isNaN(lastDay) && !isNaN(lastMonth) && !isNaN(lastYear)) {
-            const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
+        // Zistíme aktuálny dátum (dnes) a koniec mesiaca
+        // Predpoveď musí začínať od dnes, nie od posledného dátumu v dátach
+        const todayDateStr = todayDate; // Formát: "DD.MM.YYYY"
+        if (todayDateStr && todayDateStr.split('.').length === 3) {
+          const [todayDay, todayMonth, todayYear] = todayDateStr.split('.').map(Number);
+          if (!isNaN(todayDay) && !isNaN(todayMonth) && !isNaN(todayYear)) {
+            const todayDateObj = new Date(todayYear, todayMonth - 1, todayDay);
             
             // Koniec aktuálneho mesiaca - používame deň 0 nasledujúceho mesiaca
-            const endOfMonthDate = new Date(lastYear, lastMonth, 0);
+            const endOfMonthDate = new Date(todayYear, todayMonth, 0);
             
-            // Počet dní od posledného dátumu do konca mesiaca
-            const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDate) / (1000 * 60 * 60 * 24));
+            // Počet dní od dnes do konca mesiaca
+            const daysToEndOfMonth = Math.floor((endOfMonthDate - todayDateObj) / (1000 * 60 * 60 * 24));
             
             if (daysToEndOfMonth > 0 && daysToEndOfMonth <= 31) {
               // Vytvoríme dátumy a hodnoty predpovede
+              // Predpoveď začína od zajtra (dnes + 1 deň)
               forecastDates = [];
               forecastValues = [];
               
-              for (let i = 1; i <= daysToEndOfMonth; i++) {
-                const forecastDate = new Date(lastDate);
-                forecastDate.setDate(forecastDate.getDate() + i);
+              // Zistíme poslednú skutočnú hodnotu (z dnes alebo posledného dostupného dátumu)
+              const lastActualValue = cur.length > 0 ? cur[cur.length - 1] : null;
+              if (lastActualValue !== null) {
+                for (let i = 1; i <= daysToEndOfMonth; i++) {
+                  const forecastDate = new Date(todayDateObj);
+                  forecastDate.setDate(forecastDate.getDate() + i);
+                  
+                  // Formát dátum ako "DD.MM.YYYY"
+                  const day = String(forecastDate.getDate()).padStart(2, '0');
+                  const month = String(forecastDate.getMonth() + 1).padStart(2, '0');
+                  const year = forecastDate.getFullYear();
+                  forecastDates.push(`${day}.${month}.${year}`);
+                  
+                  // Vypočítame predpovedanú hodnotu - začneme od poslednej skutočnej hodnoty
+                  // Použijeme posledných 7 dní pre výpočet trendu, ale predpoveď začneme od dnes
+                  const futureVal = lastActualValue + slope * i;
+                  forecastValues.push(futureVal);
+                }
                 
-                // Formát dátum ako "DD.MM.YYYY"
-                const day = String(forecastDate.getDate()).padStart(2, '0');
-                const month = String(forecastDate.getMonth() + 1).padStart(2, '0');
-                const year = forecastDate.getFullYear();
-                forecastDates.push(`${day}.${month}.${year}`);
+                totalDays = nx + forecastValues.length;
                 
-                // Vypočítame predpovedanú hodnotu
-                const futureVal = intercept + slope * (n + i - 1);
-                forecastValues.push(futureVal);
-              }
-              
-              totalDays = nx + forecastValues.length;
-              
-              // Vykreslíme predpoveď
-              if (forecastValues.length > 0) {
-                g.save();
-                g.strokeStyle = "#8b5cf6";
-                g.lineWidth = 2;
-                g.setLineDash([4, 4]);
-                g.beginPath();
-                const lastX = X(nx - 1, totalDays);
-                const lastY = Y(cur[cur.length - 1]);
-                g.moveTo(lastX, lastY);
-                
-                forecastValues.forEach((val, i) => {
-                  const x = X(nx + i, totalDays);
-                  const y = Y(val);
-                  g.lineTo(x, y);
-                });
-                g.stroke();
-                g.restore();
+                // Vykreslíme predpoveď
+                if (forecastValues.length > 0) {
+                  g.save();
+                  g.strokeStyle = "#8b5cf6";
+                  g.lineWidth = 2;
+                  g.setLineDash([4, 4]);
+                  g.beginPath();
+                  // Začneme od posledného skutočného bodu (dnes)
+                  const lastX = X(nx - 1, totalDays);
+                  const lastY = Y(lastActualValue);
+                  g.moveTo(lastX, lastY);
+                  
+                  forecastValues.forEach((val, i) => {
+                    const x = X(nx + i, totalDays);
+                    const y = Y(val);
+                    g.lineTo(x, y);
+                  });
+                  g.stroke();
+                  g.restore();
+                }
               }
             }
           }
@@ -547,11 +570,11 @@ INDEX_HTML = Template("""<!doctype html>
     // Aktualizujeme scale s novým počtom dní
     state.scale = {left,right,top,bottom,W,H,min:chartMin,max:chartMax, nx:totalDays, X:(i)=>X(i,totalDays), Y};
     
-    // X-os s dátumami - zobrazíme pre všetky dáta vrátane predpovede
+    // X-os s dátumami - zobrazíme pre skutočné dáta + predpoveď
     g.textAlign = "center";
     g.textBaseline = "top";
     g.fillStyle = "#6b7280";
-    const allDates = [...records.map(r => r.date), ...forecastDates];
+    const allDates = [...actualRecords.map(r => r.date), ...forecastDates];
     const dateStep = Math.max(1, Math.floor(totalDays / 6));
     for (let i = 0; i < totalDays; i += dateStep) {
       const x = X(i, totalDays);
@@ -565,6 +588,20 @@ INDEX_HTML = Template("""<!doctype html>
       }
     }
     
+    // Vykreslíme vertikálnu čiaru na rozhraní medzi skutočnými dátami a predpoveďou
+    if (actualRecords.length > 0 && forecastDates.length > 0) {
+      g.save();
+      g.strokeStyle = "#9ca3af";
+      g.lineWidth = 1;
+      g.setLineDash([2, 2]);
+      const todayX = X(nx - 1, totalDays);
+      g.beginPath();
+      g.moveTo(todayX, top);
+      g.lineTo(todayX, H - bottom);
+      g.stroke();
+      g.restore();
+    }
+    
     // Hlavná X-os čiara - rozšírime ju na celú šírku
     g.strokeStyle="#e5e7eb";
     g.lineWidth = 2;
@@ -573,14 +610,27 @@ INDEX_HTML = Template("""<!doctype html>
     g.lineTo(W-right, H-bottom); 
     g.stroke();
 
-    // Zobrazíme všetky roky
+    // Zobrazíme všetky roky (len skutočné dáta, nie budúce)
     yearColors.forEach(({key, color}) => {
       if (yearsPercent[key] && yearsPercent[key].length > 0) {
-        line(yearsPercent[key], true, color);
+        // Obmedzíme zobrazenie len na skutočné dáta (do dnes)
+        const yearData = yearsPercent[key].slice(0, actualRecords.length);
+        if (yearData.length > 0) {
+          line(yearData, true, color);
+        }
       }
     });
-    if(ref.length) line(ref, true, "#9ec5fe");
-    line(cur, false, "#2563eb");
+    // Predchádzajúci rok - len skutočné dáta
+    if(ref.length) {
+      const refActual = ref.slice(0, actualRecords.length);
+      if (refActual.length > 0) {
+        line(refActual, true, "#9ec5fe");
+      }
+    }
+    // Aktuálny rok 2025 - len skutočné dáta (do dnes), nie budúce
+    if(cur.length > 0) {
+      line(cur, false, "#2563eb");
+    }
 
     if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<totalDays){
       const x = X(hoverIdx,totalDays);
@@ -727,9 +777,11 @@ INDEX_HTML = Template("""<!doctype html>
         state.prev    = data.prev_year || [];
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
+        state.today = data.today || null;
+        const todayDate = state.today;
         try {
           if(state.records.length > 0) {
-            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData, todayDate);
           }
         } catch(chartError) {
           console.error('Error drawing chart:', chartError);
@@ -756,9 +808,11 @@ INDEX_HTML = Template("""<!doctype html>
         state.prev    = data.prev_year || [];
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
+        state.today = data.today || null;
+        const todayDate = state.today;
         try {
           if(state.records.length > 0) {
-            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData, todayDate);
           }
         } catch(chartError) {
           console.error('Error drawing chart:', chartError);
@@ -821,10 +875,15 @@ INDEX_HTML = Template("""<!doctype html>
       const t = (xCss - left) / Math.max(1, usable);
       const idx = Math.round(t * (nx - 1));
       state.hoverIdx = Math.max(0, Math.min(nx-1, idx));
-      drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+      const todayDate = state.today || null;
+      drawChart(state.records, state.prev, state.hoverIdx, state.yearsData, todayDate);
     };
     chartEl.addEventListener('mousemove', onMove);
-    chartEl.addEventListener('mouseleave', ()=>{ state.hoverIdx = null; drawChart(state.records, state.prev, null, state.yearsData); });
+    chartEl.addEventListener('mouseleave', ()=>{ 
+      state.hoverIdx = null; 
+      const todayDate = state.today || null;
+      drawChart(state.records, state.prev, null, state.yearsData, todayDate); 
+    });
   }
 
   rangeEl.addEventListener('change', ()=> fetchHistory(Number(rangeEl.value || 30)));
@@ -953,22 +1012,27 @@ def api_history(days: int = 30):
             resp.headers["Cache-Control"] = "public, max-age=30"
             return resp
 
+        # Zistíme aktuálny dátum (dnes) pre obmedzenie zobrazenia
+        today = dt.date.today()
+        today_str = _format_date(today)
+        
         records = [{
             "date": _format_date(r.date),
             "percent": round(float(_to_float(r.percent)), 2),
             "delta": None if r.delta is None else round(float(_to_float(r.delta)), 2),
         } for r in rows]
 
-        # Vypočítaj štatistiky
-        percents = [r["percent"] for r in records]
-        deltas = [r["delta"] for r in records if r["delta"] is not None]
+        # Vypočítaj štatistiky len pre skutočné dáta (do dnes)
+        actual_records = [r for r in records if r["date"] <= today_str]
+        percents = [r["percent"] for r in actual_records] if actual_records else [r["percent"] for r in records]
+        deltas = [r["delta"] for r in actual_records if r["delta"] is not None] if actual_records else [r["delta"] for r in records if r["delta"] is not None]
         stats = {
             "min": round(min(percents), 2) if percents else None,
             "max": round(max(percents), 2) if percents else None,
             "avg": round(sum(percents) / len(percents), 2) if percents else None,
             "avg_delta": round(sum(deltas) / len(deltas), 2) if deltas else None,
-            "total_change": round(records[-1]["percent"] - records[0]["percent"], 2) if len(records) > 1 else None,
-            "trend": "rast" if (records[-1]["percent"] > records[0]["percent"]) else "pokles" if len(records) > 1 else "stabilný"
+            "total_change": round(actual_records[-1]["percent"] - actual_records[0]["percent"], 2) if len(actual_records) > 1 else (round(records[-1]["percent"] - records[0]["percent"], 2) if len(records) > 1 else None),
+            "trend": "rast" if (actual_records[-1]["percent"] > actual_records[0]["percent"]) else "pokles" if len(actual_records) > 1 else (("rast" if (records[-1]["percent"] > records[0]["percent"]) else "pokles") if len(records) > 1 else "stabilný")
         }
 
         # Optimalizácia: jeden dotaz pre predchádzajúci rok
@@ -1033,7 +1097,7 @@ def api_history(days: int = 30):
                 if year_rows:
                     years_data[year_key] = year_rows
 
-        result_data = {"records": records, "prev_year": prev_year, "stats": stats, "years_data": years_data}
+        result_data = {"records": records, "prev_year": prev_year, "stats": stats, "years_data": years_data, "today": today_str}
         
         # Uložíme do cache
         _history_cache[cache_key] = (result_data, now)
