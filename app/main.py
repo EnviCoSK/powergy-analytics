@@ -368,6 +368,7 @@ INDEX_HTML = Template("""<!doctype html>
   }
 
   function drawChart(records, prev, hoverIdx=null, yearsData={}){
+    try {
     if(!records || !records.length) {
       showMsg('Žiadne dáta pre graf');
       return;
@@ -467,71 +468,81 @@ INDEX_HTML = Template("""<!doctype html>
     let forecastValues = [];
     let totalDays = nx; // Počet dní v grafe vrátane predpovede
     
-    if (cur.length >= 7 && records.length > 0) {
-      const last7 = cur.slice(-7);
-      const n = last7.length;
-      const sumX = (n * (n - 1)) / 2;
-      const sumY = last7.reduce((a, b) => a + b, 0);
-      const sumXY = last7.reduce((sum, y, i) => sum + i * y, 0);
-      const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
-      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-      const intercept = (sumY - slope * sumX) / n;
-      
-      // Zistíme posledný dátum a koniec mesiaca
-      const lastDateStr = records[records.length - 1].date; // Formát: "DD.MM.YYYY"
-      const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
-      const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
-      
-      // Koniec aktuálneho mesiaca - používame deň 0 nasledujúceho mesiaca
-      // new Date(year, month, 0) vráti posledný deň predchádzajúceho mesiaca
-      // Takže new Date(year, month, 0) kde month je lastMonth vráti posledný deň lastMonth
-      const endOfMonthDate = new Date(lastYear, lastMonth, 0);
-      
-      // Počet dní od posledného dátumu do konca mesiaca
-      const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDate) / (1000 * 60 * 60 * 24));
-      
-      if (daysToEndOfMonth > 0) {
-        // Vytvoríme dátumy a hodnoty predpovede
-        forecastDates = [];
-        forecastValues = [];
+    try {
+      if (cur.length >= 7 && records.length > 0) {
+        const last7 = cur.slice(-7);
+        const n = last7.length;
+        const sumX = (n * (n - 1)) / 2;
+        const sumY = last7.reduce((a, b) => a + b, 0);
+        const sumXY = last7.reduce((sum, y, i) => sum + i * y, 0);
+        const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
         
-        for (let i = 1; i <= daysToEndOfMonth; i++) {
-          const forecastDate = new Date(lastDate);
-          forecastDate.setDate(forecastDate.getDate() + i);
-          
-          // Formát dátum ako "DD.MM.YYYY"
-          const day = String(forecastDate.getDate()).padStart(2, '0');
-          const month = String(forecastDate.getMonth() + 1).padStart(2, '0');
-          const year = forecastDate.getFullYear();
-          forecastDates.push(`${day}.${month}.${year}`);
-          
-          // Vypočítame predpovedanú hodnotu
-          const futureVal = intercept + slope * (n + i - 1);
-          forecastValues.push(futureVal);
-        }
-        
-        totalDays = nx + forecastValues.length;
-        
-        // Vykreslíme predpoveď
-        if (forecastValues.length > 0) {
-          g.save();
-          g.strokeStyle = "#8b5cf6";
-          g.lineWidth = 2;
-          g.setLineDash([4, 4]);
-          g.beginPath();
-          const lastX = X(nx - 1, totalDays);
-          const lastY = Y(cur[cur.length - 1]);
-          g.moveTo(lastX, lastY);
-          
-          forecastValues.forEach((val, i) => {
-            const x = X(nx + i, totalDays);
-            const y = Y(val);
-            g.lineTo(x, y);
-          });
-          g.stroke();
-          g.restore();
+        // Zistíme posledný dátum a koniec mesiaca
+        const lastDateStr = records[records.length - 1].date; // Formát: "DD.MM.YYYY"
+        if (lastDateStr && lastDateStr.split('.').length === 3) {
+          const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
+          if (!isNaN(lastDay) && !isNaN(lastMonth) && !isNaN(lastYear)) {
+            const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
+            
+            // Koniec aktuálneho mesiaca - používame deň 0 nasledujúceho mesiaca
+            const endOfMonthDate = new Date(lastYear, lastMonth, 0);
+            
+            // Počet dní od posledného dátumu do konca mesiaca
+            const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDate) / (1000 * 60 * 60 * 24));
+            
+            if (daysToEndOfMonth > 0 && daysToEndOfMonth <= 31) {
+              // Vytvoríme dátumy a hodnoty predpovede
+              forecastDates = [];
+              forecastValues = [];
+              
+              for (let i = 1; i <= daysToEndOfMonth; i++) {
+                const forecastDate = new Date(lastDate);
+                forecastDate.setDate(forecastDate.getDate() + i);
+                
+                // Formát dátum ako "DD.MM.YYYY"
+                const day = String(forecastDate.getDate()).padStart(2, '0');
+                const month = String(forecastDate.getMonth() + 1).padStart(2, '0');
+                const year = forecastDate.getFullYear();
+                forecastDates.push(`${day}.${month}.${year}`);
+                
+                // Vypočítame predpovedanú hodnotu
+                const futureVal = intercept + slope * (n + i - 1);
+                forecastValues.push(futureVal);
+              }
+              
+              totalDays = nx + forecastValues.length;
+              
+              // Vykreslíme predpoveď
+              if (forecastValues.length > 0) {
+                g.save();
+                g.strokeStyle = "#8b5cf6";
+                g.lineWidth = 2;
+                g.setLineDash([4, 4]);
+                g.beginPath();
+                const lastX = X(nx - 1, totalDays);
+                const lastY = Y(cur[cur.length - 1]);
+                g.moveTo(lastX, lastY);
+                
+                forecastValues.forEach((val, i) => {
+                  const x = X(nx + i, totalDays);
+                  const y = Y(val);
+                  g.lineTo(x, y);
+                });
+                g.stroke();
+                g.restore();
+              }
+            }
+          }
         }
       }
+    } catch(e) {
+      console.error('Error calculating forecast:', e);
+      // Pokračujeme bez predpovede
+      forecastDates = [];
+      forecastValues = [];
+      totalDays = nx;
     }
     
     // Aktualizujeme scale s novým počtom dní
@@ -586,10 +597,14 @@ INDEX_HTML = Template("""<!doctype html>
       } else {
         // Predpoveď
         const forecastIdx = hoverIdx - nx;
-        vCur = forecastValues[forecastIdx];
-        vPrev = null;
-        date = forecastDates[forecastIdx];
-        isForecast = true;
+        if (forecastValues && forecastValues.length > forecastIdx && forecastDates && forecastDates.length > forecastIdx) {
+          vCur = forecastValues[forecastIdx];
+          vPrev = null;
+          date = forecastDates[forecastIdx];
+          isForecast = true;
+        } else {
+          return; // Neplatný index predpovede
+        }
       }
 
       g.save();
@@ -674,6 +689,10 @@ INDEX_HTML = Template("""<!doctype html>
         </div>`);
       }
       legendEl.innerHTML = legendItems.join('');
+    }
+    } catch(e) {
+      console.error('Error in drawChart:', e);
+      showMsg('Chyba pri vykresľovaní grafu');
     }
   }
 
