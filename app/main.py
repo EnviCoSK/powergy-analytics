@@ -727,11 +727,20 @@ INDEX_HTML = Template("""<!doctype html>
         state.prev    = data.prev_year || [];
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
-        if(state.records.length > 0) {
-          drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        try {
+          if(state.records.length > 0) {
+            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+          }
+        } catch(chartError) {
+          console.error('Error drawing chart:', chartError);
+          showMsg('Chyba pri vykresľovaní grafu');
         }
-        renderTable(state.records);
-        renderStats(state.stats);
+        try {
+          renderTable(state.records);
+          renderStats(state.stats);
+        } catch(renderError) {
+          console.error('Error rendering table/stats:', renderError);
+        }
         return;
       }
       const r = await fetch(`/api/history?days=${encodeURIComponent(days)}`, {cache:'no-store'});
@@ -747,11 +756,20 @@ INDEX_HTML = Template("""<!doctype html>
         state.prev    = data.prev_year || [];
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
-        if(state.records.length > 0) {
-          drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+        try {
+          if(state.records.length > 0) {
+            drawChart(state.records, state.prev, state.hoverIdx, state.yearsData);
+          }
+        } catch(chartError) {
+          console.error('Error drawing chart:', chartError);
+          showMsg('Chyba pri vykresľovaní grafu');
         }
-        renderTable(state.records);
-        renderStats(state.stats);
+        try {
+          renderTable(state.records);
+          renderStats(state.stats);
+        } catch(renderError) {
+          console.error('Error rendering table/stats:', renderError);
+        }
       } else {
         tableEl.innerHTML = '<div class="muted">Žiadne dáta.</div>';
       }
