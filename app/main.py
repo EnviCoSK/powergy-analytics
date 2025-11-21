@@ -396,15 +396,10 @@ INDEX_HTML = Template("""<!doctype html>
       return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
     }
     
-    // Zistíme posledný dátum v dátach (nie dnes, ale posledný dostupný dátum)
-    // Použijeme `today` z API ak je k dispozícii, inak použijeme posledný dátum v `records`
+    // Zistíme posledný dátum v dátach (nie dnes, ale posledný dostupný dátum v records)
+    // Použijeme len posledný dátum v `records`, nie `today` z API (API môže mať budúci dátum)
     let maxActualDateObj = null;
-    if (today) {
-      maxActualDateObj = parseDate(today);
-    }
-    
-    // Ak nemáme `today` z API alebo je neplatný, použijeme posledný dátum v `records`
-    if (!maxActualDateObj && records.length > 0) {
+    if (records.length > 0) {
       // Zoradíme všetky dátumy a vezmeme posledný
       const sortedDates = records.map(r => parseDate(r.date)).filter(d => d !== null).sort((a, b) => a - b);
       if (sortedDates.length > 0) {
@@ -796,14 +791,34 @@ INDEX_HTML = Template("""<!doctype html>
       const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
       const ly = Math.max((isForecast ? Y(vCur) : Y(vCur)) - boxH - 10, top);
       
+      // Zistíme maximálnu výšku pre tooltip (aby sa zmestil na obrazovku)
+      const maxTooltipHeight = H - top - bottom - 20;
+      const actualBoxH = Math.min(boxH, maxTooltipHeight);
+      
       g.fillStyle = "rgba(11,18,33,0.90)";
-      g.fillRect(lx, ly, boxW, boxH);
+      g.fillRect(lx, ly, boxW, actualBoxH);
       g.fillStyle = "white";
       let ty = ly + 14;
-      tooltipLines.forEach(line => {
-        g.fillText(line, lx+pad, ty);
-        ty += lineH;
+      let linesDrawn = 0;
+      const maxLines = Math.floor((actualBoxH - 6) / lineH);
+      tooltipLines.forEach((line, idx) => {
+        if (linesDrawn < maxLines) {
+          // Skontrolujeme, či sa text zmestí
+          const textY = ty;
+          if (textY + lineH <= ly + actualBoxH - 6) {
+            g.fillText(line, lx+pad, ty);
+            ty += lineH;
+            linesDrawn++;
+          }
+        }
       });
+      
+      // Ak sa nie všetky riadky zmestili, zobrazíme indikátor
+      if (tooltipLines.length > maxLines) {
+        g.fillStyle = "rgba(255,255,255,0.7)";
+        g.font = "10px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        g.fillText(`... (+${tooltipLines.length - maxLines} riadkov)`, lx+pad, ty);
+      }
     }
     
     // Legenda
