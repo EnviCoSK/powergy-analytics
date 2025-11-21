@@ -368,11 +368,12 @@ INDEX_HTML = Template("""<!doctype html>
   }
 
   function drawChart(records, prev, hoverIdx=null, yearsData={}){
-    try {
     if(!records || !records.length) {
       showMsg('Žiadne dáta pre graf');
       return;
     }
+    
+    try {
     
     const cssW = chartEl.clientWidth || 980;
     const cssH = 320;
@@ -419,6 +420,8 @@ INDEX_HTML = Template("""<!doctype html>
     
     // Počiatočný scale (bude aktualizovaný po výpočte predpovede)
     let totalDays = nx;
+    let forecastDates = [];
+    let forecastValues = [];
 
     // Grid lines a Y-os
     g.strokeStyle = "#e5e7eb";
@@ -464,10 +467,6 @@ INDEX_HTML = Template("""<!doctype html>
     }
 
     // Predpoveď trendu (lineárna regresia na posledných 7 dňoch) až do konca mesiaca
-    let forecastDates = [];
-    let forecastValues = [];
-    let totalDays = nx; // Počet dní v grafe vrátane predpovede
-    
     try {
       if (cur.length >= 7 && records.length > 0) {
         const last7 = cur.slice(-7);
