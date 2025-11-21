@@ -188,7 +188,8 @@ def run_daily_agsi():
     try:
         # Najprv zistíme posledný dátum v DB
         last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-        last_date = last_row.date if last_row else dt.date(2025, 1, 1)
+        # Pre sezónne porovnanie potrebujeme dáta minimálne od 2021
+        last_date = last_row.date if last_row else dt.date(2021, 1, 1)
         
         # Skúsime stiahnuť dáta od posledného dátumu + 1 deň až po dnes
         today = dt.date.today()
@@ -287,11 +288,12 @@ def run_daily_agsi():
     finally:
         sess.close()
 
-def backfill_agsi(from_date: str = "2025-01-01"):
+def backfill_agsi(from_date: str = "2021-01-01"):
     """
     Načíta historické denné naplnenie zásobníkov pre EÚ z AGSI+ a uloží do DB.
     Expect: from_date = 'YYYY-MM-DD'
     Používa upsert logiku - aktualizuje existujúce záznamy, pridáva nové.
+    Pre sezónne porovnanie v grafe potrebujeme dáta minimálne od 2021-01-01.
     """
     if not AGSI_API_KEY:
         raise RuntimeError("Missing AGSI_API_KEY")

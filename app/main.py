@@ -1013,11 +1013,12 @@ def api_export(fmt: str = "csv", days: int = 30):
 
 # ---------------------------- Comments ----------------------------
 @app.api_route("/api/backfill-agsi", methods=["GET", "POST"], response_class=JSONUTF8Response)
-def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, použije posledný dátum v DB + 1 deň")):
+def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-DD; ak chýba, použije najstarší dátum v DB alebo 2021-01-01")):
     """
     Manuálne spustenie backfillu dát z AGSI API.
-    Stiahne všetky dáta od from_date (alebo od posledného dátumu v DB) po včerajšok.
+    Stiahne všetky dáta od from_date (alebo od najstaršieho dátumu v DB) po včerajšok.
     Poznámka: AGSI API má oneskorenie, dáta pre dnešok ešte nemusia byť dostupné.
+    Pre sezónne porovnanie potrebujeme dáta minimálne od 2021-01-01.
     """
     if not os.getenv("AGSI_API_KEY"):
         return JSONUTF8Response({"ok": False, "error": "AGSI_API_KEY missing"}, status_code=400)
@@ -1038,17 +1039,31 @@ def api_backfill_agsi(from_date: str | None = Query(None, description="YYYY-MM-D
                     "max_available_date": str(max_date)
                 }, status_code=400)
         else:
-            # Zistíme posledný dátum v DB
+            # Zistíme najstarší dátum v DB - ak chýbajú dáta pred 2021, načítame od 2021
+            earliest_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.asc()).first()
             last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-            if last_row:
-                calculated_start = last_row.date + dt.timedelta(days=1)
-                # Ak je vypočítaný dátum v budúcnosti, použijeme včerajšok
-                if calculated_start > max_date:
-                    start_date = str(max_date)
-                else:
+            
+            # Pre sezónne porovnanie potrebujeme dáta minimálne od 2021-01-01
+            min_required_date = dt.date(2021, 1, 1)
+            
+            if earliest_row and earliest_row.date <= min_required_date:
+                # Máme dáta od 2021, takže načítame len chýbajúce dátumy
+                if last_row:
+                    calculated_start = last_row.date + dt.timedelta(days=1)
+                    if calculated_start > max_date:
+                        return JSONUTF8Response({
+                            "ok": False,
+                            "message": "Database is up to date",
+                            "earliest_date": str(earliest_row.date),
+                            "latest_date": str(last_row.date),
+                            "max_available_date": str(max_date)
+                        })
                     start_date = str(calculated_start)
+                else:
+                    start_date = str(min_required_date)
             else:
-                start_date = "2025-01-01"
+                # Chýbajú dáta pred 2021 alebo DB je prázdna - načítame od 2021
+                start_date = str(min_required_date)
         
         from .scraper import backfill_agsi
         result = backfill_agsi(start_date)
@@ -1299,7 +1314,8 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
     try:
         # Zistíme posledný dátum v DB
         last_row = sess.query(GasStorageDaily).order_by(GasStorageDaily.date.desc()).first()
-        last_date = last_row.date if last_row else dt.date(2025, 1, 1)
+        # Pre sezónne porovnanie potrebujeme dáta minimálne od 2021
+        last_date = last_row.date if last_row else dt.date(2021, 1, 1)
         
         candidates = []
         if date:
