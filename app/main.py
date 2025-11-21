@@ -839,7 +839,11 @@ INDEX_HTML = Template("""<!doctype html>
 
 @app.on_event("startup")
 def _startup():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Warning: Database initialization failed: {e}")
+        # Pokračujeme aj keď init_db zlyhá - možno tabuľky už existujú
 
 
 # ---------------------------- Diagnostics ----------------------------
