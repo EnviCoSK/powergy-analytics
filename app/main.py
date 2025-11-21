@@ -397,49 +397,43 @@ INDEX_HTML = Template("""<!doctype html>
     }
     
     // Zistíme posledný dátum v dátach (nie dnes, ale posledný dostupný dátum)
-    let lastAvailableDate = null;
-    if (records.length > 0) {
+    // Použijeme `today` z API ak je k dispozícii, inak použijeme posledný dátum v `records`
+    let maxActualDateObj = null;
+    if (today) {
+      maxActualDateObj = parseDate(today);
+    }
+    
+    // Ak nemáme `today` z API alebo je neplatný, použijeme posledný dátum v `records`
+    if (!maxActualDateObj && records.length > 0) {
       // Zoradíme všetky dátumy a vezmeme posledný
       const sortedDates = records.map(r => parseDate(r.date)).filter(d => d !== null).sort((a, b) => a - b);
       if (sortedDates.length > 0) {
-        const lastDateObj = sortedDates[sortedDates.length - 1];
-        const day = String(lastDateObj.getDate()).padStart(2, '0');
-        const month = String(lastDateObj.getMonth() + 1).padStart(2, '0');
-        const year = lastDateObj.getFullYear();
-        lastAvailableDate = `${day}.${month}.${year}`;
+        maxActualDateObj = sortedDates[sortedDates.length - 1];
       }
     }
     
-    // Ak máme `today` z API, použijeme menší z týchto dátumov (posledný v dátach alebo dnes)
-    let todayDate = today;
-    if (!todayDate) {
-      // Fallback: použijeme dnešný dátum
+    // Fallback: ak stále nemáme dátum, použijeme dnešný dátum
+    if (!maxActualDateObj) {
       const now = new Date();
-      const day = String(now.getDate()).padStart(2, '0');
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const year = now.getFullYear();
-      todayDate = `${day}.${month}.${year}`;
+      maxActualDateObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     }
-    
-    // Použijeme posledný dátum v dátach ako maximálny dátum pre skutočné dáta
-    // Ak `today` z API je menší ako posledný dátum v dátach, použijeme `today`
-    const todayDateObj = parseDate(todayDate);
-    const lastAvailableDateObj = lastAvailableDate ? parseDate(lastAvailableDate) : null;
-    
-    // Maximálny dátum pre skutočné dáta je menší z týchto dvoch dátumov
-    const maxActualDateObj = (lastAvailableDateObj && lastAvailableDateObj < todayDateObj) 
-      ? lastAvailableDateObj 
-      : todayDateObj;
     
     // Rozdelíme dáta na skutočné (do posledného dostupného dátumu) a budúce
     // Použijeme správne porovnanie dátumov, nie stringov
     const actualRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      return recordDateObj && recordDateObj <= maxActualDateObj;
+      if (!recordDateObj || !maxActualDateObj) return false;
+      // Porovnanie dátumov bez času (len deň, mesiac, rok)
+      const recordDateOnly = new Date(recordDateObj.getFullYear(), recordDateObj.getMonth(), recordDateObj.getDate());
+      const maxDateOnly = new Date(maxActualDateObj.getFullYear(), maxActualDateObj.getMonth(), maxActualDateObj.getDate());
+      return recordDateOnly <= maxDateOnly;
     });
     const futureRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      return recordDateObj && recordDateObj > maxActualDateObj;
+      if (!recordDateObj || !maxActualDateObj) return false;
+      const recordDateOnly = new Date(recordDateObj.getFullYear(), recordDateObj.getMonth(), recordDateObj.getDate());
+      const maxDateOnly = new Date(maxActualDateObj.getFullYear(), maxActualDateObj.getMonth(), maxActualDateObj.getDate());
+      return recordDateOnly > maxDateOnly;
     });
     
     const cur = actualRecords.map(r=>r.percent);
