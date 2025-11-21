@@ -493,31 +493,31 @@ INDEX_HTML = Template("""<!doctype html>
         const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
         const intercept = (sumY - slope * sumX) / n;
         
-        // Zistíme aktuálny dátum (dnes) a koniec mesiaca
-        // Predpoveď musí začínať od dnes, nie od posledného dátumu v dátach
-        const todayDateStr = todayDate; // Formát: "DD.MM.YYYY"
-        if (todayDateStr && todayDateStr.split('.').length === 3) {
-          const [todayDay, todayMonth, todayYear] = todayDateStr.split('.').map(Number);
-          if (!isNaN(todayDay) && !isNaN(todayMonth) && !isNaN(todayYear)) {
-            const todayDateObj = new Date(todayYear, todayMonth - 1, todayDay);
+        // Zistíme posledný dátum v dátach a koniec mesiaca
+        // Predpoveď začína od posledného dátumu v dátach
+        const lastDateStr = actualRecords.length > 0 ? actualRecords[actualRecords.length - 1].date : (records.length > 0 ? records[records.length - 1].date : null);
+        if (lastDateStr && lastDateStr.split('.').length === 3) {
+          const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
+          if (!isNaN(lastDay) && !isNaN(lastMonth) && !isNaN(lastYear)) {
+            const lastDateObj = new Date(lastYear, lastMonth - 1, lastDay);
             
             // Koniec aktuálneho mesiaca - používame deň 0 nasledujúceho mesiaca
-            const endOfMonthDate = new Date(todayYear, todayMonth, 0);
+            const endOfMonthDate = new Date(lastYear, lastMonth, 0);
             
-            // Počet dní od dnes do konca mesiaca
-            const daysToEndOfMonth = Math.floor((endOfMonthDate - todayDateObj) / (1000 * 60 * 60 * 24));
+            // Počet dní od posledného dátumu v dátach do konca mesiaca
+            const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDateObj) / (1000 * 60 * 60 * 24));
             
             if (daysToEndOfMonth > 0 && daysToEndOfMonth <= 31) {
               // Vytvoríme dátumy a hodnoty predpovede
-              // Predpoveď začína od zajtra (dnes + 1 deň)
+              // Predpoveď začína od ďalšieho dňa po poslednom dátume v dátach
               forecastDates = [];
               forecastValues = [];
               
-              // Zistíme poslednú skutočnú hodnotu (z dnes alebo posledného dostupného dátumu)
+              // Zistíme poslednú skutočnú hodnotu (z posledného dátumu v dátach)
               const lastActualValue = cur.length > 0 ? cur[cur.length - 1] : null;
               if (lastActualValue !== null) {
                 for (let i = 1; i <= daysToEndOfMonth; i++) {
-                  const forecastDate = new Date(todayDateObj);
+                  const forecastDate = new Date(lastDateObj);
                   forecastDate.setDate(forecastDate.getDate() + i);
                   
                   // Formát dátum ako "DD.MM.YYYY"
@@ -527,7 +527,7 @@ INDEX_HTML = Template("""<!doctype html>
                   forecastDates.push(`${day}.${month}.${year}`);
                   
                   // Vypočítame predpovedanú hodnotu - začneme od poslednej skutočnej hodnoty
-                  // Použijeme posledných 7 dní pre výpočet trendu, ale predpoveď začneme od dnes
+                  // Použijeme posledných 7 dní pre výpočet trendu, predpoveď začne od posledného dátumu + 1 deň
                   const futureVal = lastActualValue + slope * i;
                   forecastValues.push(futureVal);
                 }
@@ -541,7 +541,7 @@ INDEX_HTML = Template("""<!doctype html>
                   g.lineWidth = 2;
                   g.setLineDash([4, 4]);
                   g.beginPath();
-                  // Začneme od posledného skutočného bodu (dnes)
+                  // Začneme od posledného skutočného bodu (posledný dátum v dátach)
                   const lastX = X(nx - 1, totalDays);
                   const lastY = Y(lastActualValue);
                   g.moveTo(lastX, lastY);
@@ -589,15 +589,16 @@ INDEX_HTML = Template("""<!doctype html>
     }
     
     // Vykreslíme vertikálnu čiaru na rozhraní medzi skutočnými dátami a predpoveďou
+    // Čiara je na poslednom dátume v dátach (nie na dnes)
     if (actualRecords.length > 0 && forecastDates.length > 0) {
       g.save();
       g.strokeStyle = "#9ca3af";
       g.lineWidth = 1;
       g.setLineDash([2, 2]);
-      const todayX = X(nx - 1, totalDays);
+      const lastDataX = X(actualRecords.length - 1, totalDays);
       g.beginPath();
-      g.moveTo(todayX, top);
-      g.lineTo(todayX, H - bottom);
+      g.moveTo(lastDataX, top);
+      g.lineTo(lastDataX, H - bottom);
       g.stroke();
       g.restore();
     }
