@@ -760,8 +760,6 @@ INDEX_HTML = Template("""<!doctype html>
       if (isForecast) {
         // Pre predpoveď zobrazíme dátum a hodnotu
         tooltipLines.push(`Predpoveď: ${vCur.toFixed(2)} %`);
-        // Môžeme pridať aj dátum, ak chceme
-        // tooltipLines.push(`Dátum: ${date}`);
       } else {
         // Zoradíme roky od najnovšieho po najstarší
         const sortedYears = Object.keys(hoverYearValues).sort((a, b) => {
