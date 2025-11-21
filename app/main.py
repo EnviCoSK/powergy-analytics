@@ -482,9 +482,10 @@ INDEX_HTML = Template("""<!doctype html>
       const [lastDay, lastMonth, lastYear] = lastDateStr.split('.').map(Number);
       const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
       
-      // Koniec aktuálneho mesiaca
-      const endOfMonth = new Date(lastYear, lastMonth, 0); // Deň 0 = posledný deň predchádzajúceho mesiaca
-      const endOfMonthDate = new Date(lastYear, lastMonth - 1, endOfMonth.getDate());
+      // Koniec aktuálneho mesiaca - používame deň 0 nasledujúceho mesiaca
+      // new Date(year, month, 0) vráti posledný deň predchádzajúceho mesiaca
+      // Takže new Date(year, month, 0) kde month je lastMonth vráti posledný deň lastMonth
+      const endOfMonthDate = new Date(lastYear, lastMonth, 0);
       
       // Počet dní od posledného dátumu do konca mesiaca
       const daysToEndOfMonth = Math.floor((endOfMonthDate - lastDate) / (1000 * 60 * 60 * 24));
