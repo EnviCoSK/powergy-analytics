@@ -400,9 +400,25 @@ INDEX_HTML = Template("""<!doctype html>
       todayDate = `${day}.${month}.${year}`;
     }
     
+    // Pomocná funkcia na porovnanie dátumov v formáte DD.MM.YYYY
+    function parseDate(dateStr) {
+      const parts = dateStr.split('.');
+      if (parts.length !== 3) return null;
+      return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    }
+    
+    const todayDateObj = parseDate(todayDate);
+    
     // Rozdelíme dáta na skutočné (do dnes) a budúce
-    const actualRecords = records.filter(r => r.date <= todayDate);
-    const futureRecords = records.filter(r => r.date > todayDate);
+    // Použijeme správne porovnanie dátumov, nie stringov
+    const actualRecords = records.filter(r => {
+      const recordDateObj = parseDate(r.date);
+      return recordDateObj && recordDateObj <= todayDateObj;
+    });
+    const futureRecords = records.filter(r => {
+      const recordDateObj = parseDate(r.date);
+      return recordDateObj && recordDateObj > todayDateObj;
+    });
     
     const cur = actualRecords.map(r=>r.percent);
     const ref = (prev||[]).slice(0, actualRecords.length).map(r=>r.percent);
@@ -637,13 +653,28 @@ INDEX_HTML = Template("""<!doctype html>
       const x = X(hoverIdx,totalDays);
       // Pre predpoveď použijeme iné hodnoty
       let vCur, vPrev, date, isForecast;
+      let hoverYearValues = {}; // Hodnoty pre všetky roky v tomto bode
+      
       if (hoverIdx < nx) {
         // Skutočné dáta
         vCur = cur[hoverIdx];
         const hasPrev = Array.isArray(ref) && ref.length === nx;
         vPrev = hasPrev ? ref[hoverIdx] : null;
-        date = records[hoverIdx].date;
+        date = actualRecords[hoverIdx].date;
         isForecast = false;
+        
+        // Zbierame hodnoty pre všetky roky v tomto bode
+        hoverYearValues[new Date().getFullYear()] = vCur;
+        if (vPrev !== null) {
+          hoverYearValues[new Date().getFullYear() - 1] = vPrev;
+        }
+        // Zbierame hodnoty pre ostatné roky
+        Object.keys(yearsPercent).forEach(key => {
+          if (yearsPercent[key] && yearsPercent[key].length > hoverIdx) {
+            const yearNum = parseInt(key.replace('year_', ''));
+            hoverYearValues[yearNum] = yearsPercent[key][hoverIdx];
+          }
+        });
       } else {
         // Predpoveď
         const forecastIdx = hoverIdx - nx;
@@ -652,6 +683,7 @@ INDEX_HTML = Template("""<!doctype html>
           vPrev = null;
           date = forecastDates[forecastIdx];
           isForecast = true;
+          hoverYearValues['predpoveď'] = vCur;
         } else {
           return; // Neplatný index predpovede
         }
@@ -663,47 +695,89 @@ INDEX_HTML = Template("""<!doctype html>
       g.beginPath(); g.moveTo(x, top); g.lineTo(x, H-bottom); g.stroke();
       g.restore();
 
-      const yCur = Y(vCur);
-      if (isForecast) {
-        g.fillStyle = "#8b5cf6";
-      } else {
-        g.fillStyle = "#2563eb";
-      }
-      g.beginPath(); g.arc(x,yCur,4,0,Math.PI*2); g.fill();
-
-      if(vPrev!=null && !isForecast){
-        const yPrev = Y(vPrev);
-        g.fillStyle = "#9ec5fe";
-        g.beginPath(); g.arc(x,yPrev,4,0,Math.PI*2); g.fill();
-      }
-
+      // Zobrazíme všetky dostupné body pre tento dátum
       const currentYear = new Date().getFullYear();
-      let line1, line2 = '';
       if (isForecast) {
-        line1 = `Predpoveď: ${vCur.toFixed(2)} %`;
+        // Predpoveď - fialová
+        const yForecast = Y(vCur);
+        g.fillStyle = "#8b5cf6";
+        g.beginPath(); g.arc(x, yForecast, 4, 0, Math.PI*2); g.fill();
       } else {
-        line1 = `${currentYear}: ${vCur.toFixed(2)} %`;
-        line2 = (vPrev!=null) ? `${currentYear-1}: ${vPrev.toFixed(2)} %` : '';
+        // Skutočné dáta - modrá
+        const yCur = Y(vCur);
+        g.fillStyle = "#2563eb";
+        g.beginPath(); g.arc(x, yCur, 4, 0, Math.PI*2); g.fill();
+        
+        // Predchádzajúci rok - svetlo modrá
+        if(vPrev!=null){
+          const yPrev = Y(vPrev);
+          g.fillStyle = "#9ec5fe";
+          g.beginPath(); g.arc(x, yPrev, 4, 0, Math.PI*2); g.fill();
+        }
+        
+        // Ostatné roky - zobrazíme len ak sú dostupné
+        Object.keys(hoverYearValues).forEach(yearKey => {
+          const yearNum = parseInt(yearKey);
+          if (!isNaN(yearNum) && yearNum !== currentYear && yearNum !== currentYear - 1) {
+            const yearValue = hoverYearValues[yearKey];
+            const yearColor = yearColors.find(y => y.name === String(yearNum))?.color || "#6b7280";
+            const yYear = Y(yearValue);
+            g.fillStyle = yearColor;
+            g.beginPath(); g.arc(x, yYear, 3, 0, Math.PI*2); g.fill();
+          }
+        });
       }
+
+      // Vytvoríme tooltip s všetkými dostupnými dátami
+      const tooltipLines = [];
+      tooltipLines.push(date);
+      
+      if (isForecast) {
+        tooltipLines.push(`Predpoveď: ${vCur.toFixed(2)} %`);
+      } else {
+        // Zoradíme roky od najnovšieho po najstarší
+        const sortedYears = Object.keys(hoverYearValues).sort((a, b) => {
+          const yearA = parseInt(a.replace('year_', '')) || parseInt(a);
+          const yearB = parseInt(b.replace('year_', '')) || parseInt(b);
+          return isNaN(yearA) || isNaN(yearB) ? 0 : (yearB - yearA);
+        });
+        
+        sortedYears.forEach(yearKey => {
+          const yearValue = hoverYearValues[yearKey];
+          const yearNum = parseInt(yearKey.replace('year_', ''));
+          if (!isNaN(yearNum)) {
+            tooltipLines.push(`${yearNum}: ${yearValue.toFixed(2)} %`);
+          } else if (yearKey === 'predpoveď') {
+            tooltipLines.push(`Predpoveď: ${yearValue.toFixed(2)} %`);
+          }
+        });
+      }
+      
       const pad = 6;
       g.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       g.textAlign = "left";
-      const w1 = g.measureText(`${date}`).width;
-      const w2 = g.measureText(line1).width;
-      const w3 = line2 ? g.measureText(line2).width : 0;
-      const boxW = Math.ceil(Math.max(w1, w2, w3)) + pad*2;
+      
+      // Vypočítame šírku tooltipu
+      let maxWidth = 0;
+      tooltipLines.forEach(line => {
+        const w = g.measureText(line).width;
+        if (w > maxWidth) maxWidth = w;
+      });
+      
+      const boxW = Math.ceil(maxWidth) + pad*2;
       const lineH = 16;
-      const lines = line2 ? 3 : 2;
-      const boxH = lineH*lines + 6;
+      const boxH = lineH * tooltipLines.length + 6;
       const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
-      const ly = Math.max(yCur - boxH - 10, top);
+      const ly = Math.max((isForecast ? Y(vCur) : Y(vCur)) - boxH - 10, top);
+      
       g.fillStyle = "rgba(11,18,33,0.90)";
       g.fillRect(lx, ly, boxW, boxH);
       g.fillStyle = "white";
       let ty = ly + 14;
-      g.fillText(date, lx+pad, ty); ty += lineH;
-      g.fillText(line1, lx+pad, ty); ty += lineH;
-      if(line2) g.fillText(line2, lx+pad, ty);
+      tooltipLines.forEach(line => {
+        g.fillText(line, lx+pad, ty);
+        ty += lineH;
+      });
     }
     
     // Legenda
