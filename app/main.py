@@ -396,12 +396,25 @@ INDEX_HTML = Template("""<!doctype html>
       return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
     }
     
-    // Zistíme posledný dátum v dátach (nie dnes, ale posledný dostupný dátum v records)
-    // Použijeme len posledný dátum v `records`, nie `today` z API (API môže mať budúci dátum)
+    // Zistíme posledný skutočný dátum (použijeme `today` z API, ktorý je posledný dostupný dátum z AGSI)
+    // Ak nemáme `today` z API, použijeme najnovší dátum v `records`, ktorý nie je v budúcnosti
     let maxActualDateObj = null;
-    if (records.length > 0) {
-      // Zoradíme všetky dátumy a vezmeme posledný
-      const sortedDates = records.map(r => parseDate(r.date)).filter(d => d !== null).sort((a, b) => a - b);
+    if (today) {
+      maxActualDateObj = parseDate(today);
+    }
+    
+    // Ak nemáme `today` z API, nájdeme najnovší dátum v `records`, ktorý nie je v budúcnosti
+    if (!maxActualDateObj && records.length > 0) {
+      const now = new Date();
+      const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      // Zoradíme dátumy a vezmeme posledný, ktorý nie je v budúcnosti
+      const sortedDates = records.map(r => parseDate(r.date))
+        .filter(d => d !== null)
+        .filter(d => {
+          const dOnly = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+          return dOnly <= todayDateOnly;
+        })
+        .sort((a, b) => a - b);
       if (sortedDates.length > 0) {
         maxActualDateObj = sortedDates[sortedDates.length - 1];
       }
@@ -413,21 +426,20 @@ INDEX_HTML = Template("""<!doctype html>
       maxActualDateObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     }
     
-    // Rozdelíme dáta na skutočné (do posledného dostupného dátumu) a budúce
+    // Rozdelíme dáta na skutočné (do posledného dostupného dátumu z AGSI) a budúce
     // Použijeme správne porovnanie dátumov, nie stringov
+    const maxDateOnly = new Date(maxActualDateObj.getFullYear(), maxActualDateObj.getMonth(), maxActualDateObj.getDate());
     const actualRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      if (!recordDateObj || !maxActualDateObj) return false;
+      if (!recordDateObj) return false;
       // Porovnanie dátumov bez času (len deň, mesiac, rok)
       const recordDateOnly = new Date(recordDateObj.getFullYear(), recordDateObj.getMonth(), recordDateObj.getDate());
-      const maxDateOnly = new Date(maxActualDateObj.getFullYear(), maxActualDateObj.getMonth(), maxActualDateObj.getDate());
       return recordDateOnly <= maxDateOnly;
     });
     const futureRecords = records.filter(r => {
       const recordDateObj = parseDate(r.date);
-      if (!recordDateObj || !maxActualDateObj) return false;
+      if (!recordDateObj) return false;
       const recordDateOnly = new Date(recordDateObj.getFullYear(), recordDateObj.getMonth(), recordDateObj.getDate());
-      const maxDateOnly = new Date(maxActualDateObj.getFullYear(), maxActualDateObj.getMonth(), maxActualDateObj.getDate());
       return recordDateOnly > maxDateOnly;
     });
     
@@ -744,7 +756,10 @@ INDEX_HTML = Template("""<!doctype html>
       tooltipLines.push(date);
       
       if (isForecast) {
+        // Pre predpoveď zobrazíme dátum a hodnotu
         tooltipLines.push(`Predpoveď: ${vCur.toFixed(2)} %`);
+        // Môžeme pridať aj dátum, ak chceme
+        // tooltipLines.push(`Dátum: ${date}`);
       } else {
         // Zoradíme roky od najnovšieho po najstarší
         const sortedYears = Object.keys(hoverYearValues).sort((a, b) => {
