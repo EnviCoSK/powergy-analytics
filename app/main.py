@@ -159,14 +159,23 @@ INDEX_HTML = Template("""<!doctype html>
  .legend-item { display:flex; align-items:center; gap:6px; }
  .legend-line { width:20px; height:2px; }
  .legend-dash { width:20px; height:2px; background-image: repeating-linear-gradient(to right, currentColor 0, currentColor 4px, transparent 4px, transparent 8px); }
- table { width:100%; border-collapse:collapse; }
- th { text-align:left; padding:8px; border-bottom:1px solid #e5e7eb; cursor:pointer; user-select:none; }
- th:hover { background:#f9fafb; }
- th.sort-asc::after { content:" ▲"; font-size:10px; }
- th.sort-desc::after { content:" ▼"; font-size:10px; }
- td { padding:8px; border-bottom:1px solid #f3f4f6; }
- tr:hover { background:#f9fafb; }
- .current-date { background:#eff6ff !important; font-weight:500; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; padding:6px; border-bottom:1px solid #e5e7eb; cursor:pointer; user-select:none; font-size:13px; }
+th:hover { background:#f9fafb; }
+th.sort-asc::after { content:" ▲"; font-size:10px; }
+th.sort-desc::after { content:" ▼"; font-size:10px; }
+td { padding:6px; border-bottom:1px solid #f3f4f6; font-size:13px; }
+tr:hover { background:#f9fafb; }
+.current-date { background:#eff6ff !important; font-weight:500; }
+.pagination { display:flex; align-items:center; justify-content:space-between; margin-top:12px; gap:8px; }
+.pagination-info { color:#6b7280; font-size:13px; }
+.pagination-controls { display:flex; align-items:center; gap:4px; }
+.pagination-btn { padding:6px 12px; border-radius:6px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; font-size:13px; }
+.pagination-btn:hover:not(:disabled) { background:#f9fafb; }
+.pagination-btn:disabled { opacity:0.5; cursor:not-allowed; }
+.pagination-page { padding:6px 10px; border-radius:6px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; font-size:13px; min-width:32px; text-align:center; }
+.pagination-page:hover { background:#f9fafb; }
+.pagination-page.active { background:#2563eb; color:#fff; border-color:#2563eb; }
 </style>
 </head>
 <body>
@@ -220,7 +229,7 @@ INDEX_HTML = Template("""<!doctype html>
   }
 
   const cache = new Map();
-  let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {}, today: null };
+  let state = { records: [], prev: [], hoverIdx: null, scale: null, sortCol: null, sortDir: 'desc', stats: {}, yearsData: {}, today: null, currentPage: 1 };
 
   function showMsg(text){ document.getElementById('msg').textContent = text || ''; }
   function showLoading(show) {
@@ -324,32 +333,93 @@ INDEX_HTML = Template("""<!doctype html>
       });
     }
     
+    // Stránkovanie
+    const itemsPerPage = 15;
+    const totalItems = reversedRecords.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage);
+    
+    // Zabezpečíme, že currentPage nie je mimo rozsahu
+    if (state.currentPage > totalPages) {
+      state.currentPage = totalPages || 1;
+    }
+    if (state.currentPage < 1) {
+      state.currentPage = 1;
+    }
+    
+    const startIdx = (state.currentPage - 1) * itemsPerPage;
+    const endIdx = startIdx + itemsPerPage;
+    const pageRecords = reversedRecords.slice(startIdx, endIdx);
+    
     const todayDate = reversedRecords[0]?.date;
     const sortClass = (col) => state.sortCol === col ? `sort-${state.sortDir}` : '';
+    
+    // Vytvoríme navigáciu stránok
+    let paginationHTML = '';
+    if (totalPages > 1) {
+      const pageNumbers = [];
+      const maxVisiblePages = 7;
+      let startPage = Math.max(1, state.currentPage - Math.floor(maxVisiblePages / 2));
+      let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+      
+      if (endPage - startPage < maxVisiblePages - 1) {
+        startPage = Math.max(1, endPage - maxVisiblePages + 1);
+      }
+      
+      for (let i = startPage; i <= endPage; i++) {
+        pageNumbers.push(i);
+      }
+      
+      paginationHTML = `
+        <div class="pagination">
+          <div class="pagination-info">
+            Zobrazené ${startIdx + 1}-${Math.min(endIdx, totalItems)} z ${totalItems} záznamov
+          </div>
+          <div class="pagination-controls">
+            <button class="pagination-btn" ${state.currentPage === 1 ? 'disabled' : ''} data-page="${state.currentPage - 1}">Predchádzajúca</button>
+            ${startPage > 1 ? `<button class="pagination-page" data-page="1">1</button>${startPage > 2 ? '<span>...</span>' : ''}` : ''}
+            ${pageNumbers.map(page => `
+              <button class="pagination-page ${page === state.currentPage ? 'active' : ''}" data-page="${page}">${page}</button>
+            `).join('')}
+            ${endPage < totalPages ? `${endPage < totalPages - 1 ? '<span>...</span>' : ''}<button class="pagination-page" data-page="${totalPages}">${totalPages}</button>` : ''}
+            <button class="pagination-btn" ${state.currentPage === totalPages ? 'disabled' : ''} data-page="${state.currentPage + 1}">Ďalšia</button>
+          </div>
+        </div>
+      `;
+    } else {
+      paginationHTML = `
+        <div class="pagination">
+          <div class="pagination-info">
+            Zobrazené ${totalItems} z ${totalItems} záznamov
+          </div>
+        </div>
+      `;
+    }
     
     tableEl.innerHTML = `
       <table style="width:100%; border-collapse:collapse;">
         <thead>
           <tr>
-            <th class="${sortClass('date')}" data-col="date" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Dátum</th>
-            <th class="${sortClass('percent')}" data-col="percent" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Naplnenie (%)</th>
-            <th class="${sortClass('delta')}" data-col="delta" style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">Denná zmena</th>
+            <th class="${sortClass('date')}" data-col="date">Dátum</th>
+            <th class="${sortClass('percent')}" data-col="percent">Naplnenie (%)</th>
+            <th class="${sortClass('delta')}" data-col="delta">Denná zmena</th>
           </tr>
         </thead>
         <tbody>
-          ${reversedRecords.map((r, idx) => {
-            const isToday = idx === 0 && r.date === todayDate;
+          ${pageRecords.map((r, idx) => {
+            const globalIdx = startIdx + idx;
+            const isToday = globalIdx === 0 && r.date === todayDate;
             const deltaClass = getDeltaColor(r.delta);
             return `
             <tr ${isToday ? 'class="current-date"' : ''}>
-              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.date}</td>
-              <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.percent.toFixed(2)}</td>
-              <td class="${deltaClass}" style="padding:8px; border-bottom:1px solid #f3f4f6;">${r.delta==null?'—':r.delta.toFixed(2)}</td>
+              <td>${r.date}</td>
+              <td>${r.percent.toFixed(2)}</td>
+              <td class="${deltaClass}">${r.delta==null?'—':r.delta.toFixed(2)}</td>
             </tr>
           `;
           }).join('')}
         </tbody>
       </table>
+      ${paginationHTML}
     `;
     
     // Bind sort handlers
@@ -362,7 +432,21 @@ INDEX_HTML = Template("""<!doctype html>
           state.sortCol = col;
           state.sortDir = 'desc';
         }
+        state.currentPage = 1; // Reset na prvú stránku pri zmene triedenia
         renderTable(records);
+      });
+    });
+    
+    // Bind pagination handlers
+    tableEl.querySelectorAll('.pagination-btn[data-page], .pagination-page[data-page]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const page = parseInt(btn.dataset.page);
+        if (page && page >= 1 && page <= totalPages) {
+          state.currentPage = page;
+          renderTable(records);
+          // Scroll na začiatok tabuľky
+          tableEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       });
     });
   }
@@ -1094,6 +1178,7 @@ INDEX_HTML = Template("""<!doctype html>
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
         state.today = data.today || null;
+        state.currentPage = 1; // Reset na prvú stránku
         const todayDate = state.today;
         try {
           if(state.records.length > 0) {
@@ -1125,6 +1210,7 @@ INDEX_HTML = Template("""<!doctype html>
         state.stats   = data.stats || {};
         state.yearsData = data.years_data || {};
         state.today = data.today || null;
+        state.currentPage = 1; // Reset na prvú stránku
         const todayDate = state.today;
         try {
           if(state.records.length > 0) {
