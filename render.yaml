@@ -30,3 +30,18 @@ services:
       - key: OPENAI_API_KEY
         sync: false
         optional: true
+
+  - type: cron
+    name: daily-refresh
+    env: docker
+    schedule: "0 8 * * *"
+    dockerCommand: python /app/run_daily_refresh.py
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AGSI_API_KEY
+        sync: false
+      - key: APP_BASE_URL
+        value: https://powergy-analytics.onrender.com

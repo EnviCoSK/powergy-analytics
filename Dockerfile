@@ -11,5 +11,6 @@ RUN python -m playwright install --with-deps chromium
 
 COPY app ./app
 COPY run_daily.py ./run_daily.py
+COPY run_daily_refresh.py ./run_daily_refresh.py
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
