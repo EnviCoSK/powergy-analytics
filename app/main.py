@@ -505,15 +505,18 @@ INDEX_HTML = Template("""<!doctype html>
     g.lineTo(left, H-bottom);
     g.stroke();
 
-    function line(data, dashed, color){
+    function line(data, dashed, color, totalN=null){
       if(!data.length) return;
+      // Ak nie je zadaný totalN, použijeme data.length (pre staršie roky, ktoré majú rovnakú dĺžku)
+      // Pre aktuálny rok (2025) použijeme totalDays, aby sa čiara správne zarovnala s predpoveďou
+      const n = totalN !== null ? totalN : data.length;
       g.save();
       g.lineWidth = 2;
       if(dashed) g.setLineDash([6,6]);
       g.strokeStyle = color;
       g.beginPath();
       data.forEach((v,i)=>{
-        const x = X(i,data.length), y = Y(v);
+        const x = X(i,n), y = Y(v);
         if(i===0) g.moveTo(x,y); else g.lineTo(x,y);
       });
       g.stroke();
@@ -669,9 +672,10 @@ INDEX_HTML = Template("""<!doctype html>
     }
     // Aktuálny rok 2025 - len skutočné dáta (do posledného dostupného dátumu z AGSI), nie budúce
     // Použijeme len `cur`, ktorý obsahuje len `actualRecords` (už filtrované)
+    // Použijeme totalDays, aby sa čiara správne zarovnala s predpoveďou a skončila pri zvislej prerušovanej čiare
     if(cur.length > 0) {
-      // Vykreslíme modrú čiaru len pre skutočné dáta
-      line(cur, false, "#2563eb");
+      // Vykreslíme modrú čiaru len pre skutočné dáta, ale použijeme totalDays pre správne zarovnanie
+      line(cur, false, "#2563eb", totalDays);
     }
 
     if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<totalDays){

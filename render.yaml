@@ -16,22 +16,6 @@ services:
         value: https://spravy.powergy.sk
 
   - type: cron
-    name: powergy-scraper-daily
-    env: docker
-    schedule: "0 8 * * *"
-    dockerCommand: python /app/run_daily.py
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: AGSI_API_KEY
-        sync: false
-      - key: KYOS_URL
-        value: https://gas.kyos.com/
-      - key: OPENAI_API_KEY
-        sync: false
-        optional: true
-
-  - type: cron
     name: daily-refresh
     env: docker
     schedule: "0 8 * * *"
