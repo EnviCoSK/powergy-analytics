@@ -723,70 +723,18 @@ INDEX_HTML = Template("""<!doctype html>
           hoverYearValues['predpoveď'] = vCur;
           
           // Pre predpoveď nájdeme dáta z predchádzajúcich rokov pre ten istý deň a mesiac
-          // Použijeme rovnakú logiku ako pri kreslení čiar - nájdeme dátum v actualRecords
-          // a potom nájdeme zodpovedajúci dátum v yearsPercent
+          // Použijeme yearsData, ktoré obsahuje všetky dáta (nie len do actualRecords.length)
           const forecastDateParts = date.split('.');
           if (forecastDateParts.length === 3) {
             const forecastDay = parseInt(forecastDateParts[0]);
             const forecastMonth = parseInt(forecastDateParts[1]);
             const currentYear = new Date().getFullYear();
             
-            // Najprv nájdeme zodpovedajúci dátum v actualRecords (ak existuje)
-            // Potom použijeme rovnaký index v yearsPercent
-            let matchingActualIdx = -1;
-            for (let i = 0; i < actualRecords.length; i++) {
-              const recordParts = actualRecords[i].date.split('.');
-              if (recordParts.length === 3) {
-                const recordDay = parseInt(recordParts[0]);
-                const recordMonth = parseInt(recordParts[1]);
-                if (recordDay === forecastDay && recordMonth === forecastMonth) {
-                  matchingActualIdx = i;
-                  break;
-                }
-              }
-            }
-            
-            // Ak sme našli zodpovedajúci dátum v actualRecords, použijeme rovnaký index v yearsPercent
-            if (matchingActualIdx >= 0) {
-              Object.keys(yearsPercent).forEach(key => {
-                if (yearsPercent[key] && yearsPercent[key].length > 0) {
-                  const yearData = yearsPercent[key].slice(0, actualRecords.length);
-                  if (yearData.length > matchingActualIdx) {
-                    const yearNum = parseInt(key.replace('year_', ''));
-                    hoverYearValues[yearNum] = yearData[matchingActualIdx];
-                  }
-                }
-              });
-              
-              // Hľadáme aj dáta z predchádzajúceho roka (2024) v `ref`
-              const refActual = ref.length > 0 ? ref.slice(0, actualRecords.length) : [];
-              if (refActual.length > matchingActualIdx) {
-                hoverYearValues[currentYear - 1] = refActual[matchingActualIdx];
-              }
-            } else {
-              // Ak sme nenašli zodpovedajúci dátum v actualRecords, použijeme pôvodnú logiku
-              // (napr. pre dátumy, ktoré nie sú v actualRecords, ale sú v yearsData)
-              Object.keys(yearsData || {}).forEach(key => {
-                const yearNum = parseInt(key.replace('year_', ''));
-                if (!isNaN(yearNum) && yearsData[key] && Array.isArray(yearsData[key])) {
-                  const matchingRecord = yearsData[key].find(r => {
-                    if (!r || !r.date) return false;
-                    const recordParts = r.date.split('.');
-                    if (recordParts.length !== 3) return false;
-                    const recordDay = parseInt(recordParts[0]);
-                    const recordMonth = parseInt(recordParts[1]);
-                    return recordDay === forecastDay && recordMonth === forecastMonth;
-                  });
-                  
-                  if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
-                    hoverYearValues[yearNum] = matchingRecord.percent;
-                  }
-                }
-              });
-              
-              // Hľadáme aj dáta z predchádzajúceho roka (2024) v `prev`
-              if (prev && Array.isArray(prev) && prev.length > 0) {
-                const prevYearRecord = prev.find(r => {
+            // Hľadáme dáta z predchádzajúcich rokov pre ten istý deň a mesiac v yearsData
+            Object.keys(yearsData || {}).forEach(key => {
+              const yearNum = parseInt(key.replace('year_', ''));
+              if (!isNaN(yearNum) && yearsData[key] && Array.isArray(yearsData[key])) {
+                const matchingRecord = yearsData[key].find(r => {
                   if (!r || !r.date) return false;
                   const recordParts = r.date.split('.');
                   if (recordParts.length !== 3) return false;
@@ -795,9 +743,25 @@ INDEX_HTML = Template("""<!doctype html>
                   return recordDay === forecastDay && recordMonth === forecastMonth;
                 });
                 
-                if (prevYearRecord && prevYearRecord.percent !== null && prevYearRecord.percent !== undefined) {
-                  hoverYearValues[currentYear - 1] = prevYearRecord.percent;
+                if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
+                  hoverYearValues[yearNum] = matchingRecord.percent;
                 }
+              }
+            });
+            
+            // Hľadáme aj dáta z predchádzajúceho roka (2024) v `prev`
+            if (prev && Array.isArray(prev) && prev.length > 0) {
+              const prevYearRecord = prev.find(r => {
+                if (!r || !r.date) return false;
+                const recordParts = r.date.split('.');
+                if (recordParts.length !== 3) return false;
+                const recordDay = parseInt(recordParts[0]);
+                const recordMonth = parseInt(recordParts[1]);
+                return recordDay === forecastDay && recordMonth === forecastMonth;
+              });
+              
+              if (prevYearRecord && prevYearRecord.percent !== null && prevYearRecord.percent !== undefined) {
+                hoverYearValues[currentYear - 1] = prevYearRecord.percent;
               }
             }
           }
