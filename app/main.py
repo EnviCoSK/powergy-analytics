@@ -1602,12 +1602,11 @@ def api_export(fmt: str = "csv", days: int = 30):
         if fmt.lower() == "csv":
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow(["date", "percent", "delta", "comment"])
+            w.writerow(["date", "percent", "delta"])
             for r in rows:
                 w.writerow([str(r.date),
                             f"{_to_float(r.percent):.2f}" if _to_float(r.percent) is not None else "",
-                            "" if r.delta is None else f"{_to_float(r.delta):.2f}",
-                            (r.comment or "").replace("\n"," ").strip()])
+                            "" if r.delta is None else f"{_to_float(r.delta):.2f}"])
             buf.seek(0)
             return StreamingResponse(
                 iter([buf.getvalue()]),
@@ -1618,12 +1617,11 @@ def api_export(fmt: str = "csv", days: int = 30):
             if openpyxl is None:
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                w.writerow(["date", "percent", "delta", "comment"])
+                w.writerow(["date", "percent", "delta"])
                 for r in rows:
                     w.writerow([str(r.date),
                                 f"{_to_float(r.percent):.2f}" if _to_float(r.percent) is not None else "",
-                                "" if r.delta is None else f"{_to_float(r.delta):.2f}",
-                                (r.comment or "").replace("\n"," ").strip()])
+                                "" if r.delta is None else f"{_to_float(r.delta):.2f}"])
                 buf.seek(0)
                 return StreamingResponse(
                     iter([buf.getvalue()]),
@@ -1633,12 +1631,11 @@ def api_export(fmt: str = "csv", days: int = 30):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "gas_storage"
-            ws.append(["date", "percent", "delta", "comment"])
+            ws.append(["date", "percent", "delta"])
             for r in rows:
                 ws.append([str(r.date),
                            float(f"{_to_float(r.percent):.2f}") if _to_float(r.percent) is not None else None,
-                           None if r.delta is None else float(f"{_to_float(r.delta):.2f}"),
-                           (r.comment or "").strip()])
+                           None if r.delta is None else float(f"{_to_float(r.delta):.2f}")])
             xbuf = io.BytesIO()
             wb.save(xbuf)
             xbuf.seek(0)
