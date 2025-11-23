@@ -654,43 +654,11 @@ INDEX_HTML = Template("""<!doctype html>
     g.stroke();
 
     // Zobrazíme všetky roky (len skutočné dáta, nie budúce)
-    // Vytvoríme mapu dátumov na hodnoty pre každý rok
-    const yearDataMap = {};
-    Object.keys(yearsData || {}).forEach(key => {
-      yearDataMap[key] = {};
-      if (yearsData[key] && Array.isArray(yearsData[key])) {
-        yearsData[key].forEach(r => {
-          if (r && r.date) {
-            yearDataMap[key][r.date] = r.percent;
-          }
-        });
-      }
-    });
-    
     yearColors.forEach(({key, color}) => {
-      if (yearsData[key] && Array.isArray(yearsData[key])) {
-        // Vytvoríme dáta len pre dátumy, ktoré sú v actualRecords
-        const yearData = [];
-        actualRecords.forEach(record => {
-          const recordParts = record.date.split('.');
-          if (recordParts.length === 3) {
-            const recordDay = recordParts[0];
-            const recordMonth = recordParts[1];
-            // Hľadáme záznam s rovnakým dňom a mesiacom v predchádzajúcom roku
-            const matchingRecord = yearsData[key].find(r => {
-              if (!r || !r.date) return false;
-              const rParts = r.date.split('.');
-              if (rParts.length !== 3) return false;
-              return rParts[0] === recordDay && rParts[1] === recordMonth;
-            });
-            if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
-              yearData.push(matchingRecord.percent);
-            } else {
-              // Ak nie je záznam, použijeme baseline (prvú hodnotu)
-              yearData.push(baseline);
-            }
-          }
-        });
+      if (yearsPercent[key] && yearsPercent[key].length > 0) {
+        // Obmedzíme zobrazenie len na skutočné dáta (do dnes)
+        // yearsPercent obsahuje dáta zoradené podľa dátumov, takže použijeme len prvých actualRecords.length
+        const yearData = yearsPercent[key].slice(0, actualRecords.length);
         if (yearData.length > 0) {
           line(yearData, true, color);
         }
@@ -733,25 +701,14 @@ INDEX_HTML = Template("""<!doctype html>
         if (vPrev !== null) {
           hoverYearValues[new Date().getFullYear() - 1] = vPrev;
         }
-        // Zbierame hodnoty pre ostatné roky - používame dátum z actualRecords na nájdenie zodpovedajúcich dát
-        const currentRecordDate = actualRecords[hoverIdx].date;
-        Object.keys(yearsData || {}).forEach(key => {
-          const yearNum = parseInt(key.replace('year_', ''));
-          if (!isNaN(yearNum) && yearsData[key] && Array.isArray(yearsData[key])) {
-            // Nájdeme záznam s rovnakým dátumom (deň a mesiac) v predchádzajúcom roku
-            const recordParts = currentRecordDate.split('.');
-            if (recordParts.length === 3) {
-              const recordDay = parseInt(recordParts[0]);
-              const recordMonth = parseInt(recordParts[1]);
-              const matchingRecord = yearsData[key].find(r => {
-                if (!r || !r.date) return false;
-                const rParts = r.date.split('.');
-                if (rParts.length !== 3) return false;
-                return parseInt(rParts[0]) === recordDay && parseInt(rParts[1]) === recordMonth;
-              });
-              if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
-                hoverYearValues[yearNum] = matchingRecord.percent;
-              }
+        // Zbierame hodnoty pre ostatné roky - používame rovnakú logiku ako pri kreslení čiar
+        Object.keys(yearsPercent).forEach(key => {
+          if (yearsPercent[key] && yearsPercent[key].length > 0) {
+            // Použijeme len dáta do actualRecords.length, rovnako ako pri kreslení čiar
+            const yearData = yearsPercent[key].slice(0, actualRecords.length);
+            if (yearData.length > hoverIdx) {
+              const yearNum = parseInt(key.replace('year_', ''));
+              hoverYearValues[yearNum] = yearData[hoverIdx];
             }
           }
         });
