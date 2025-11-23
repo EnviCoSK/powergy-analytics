@@ -654,12 +654,14 @@ INDEX_HTML = Template("""<!doctype html>
     g.stroke();
 
     // Zobrazíme všetky roky (len skutočné dáta, nie budúce)
+    // Použijeme totalDays pre správne zarovnanie s aktuálnym rokom a predpoveďou
     yearColors.forEach(({key, color}) => {
       if (yearsPercent[key] && yearsPercent[key].length > 0) {
         // Obmedzíme zobrazenie len na skutočné dáta (do dnes)
         const yearData = yearsPercent[key].slice(0, actualRecords.length);
         if (yearData.length > 0) {
-          line(yearData, true, color);
+          // Použijeme totalDays pre správne zarovnanie X pozícií
+          line(yearData, true, color, totalDays);
         }
       }
     });
@@ -667,7 +669,8 @@ INDEX_HTML = Template("""<!doctype html>
     if(ref.length) {
       const refActual = ref.slice(0, actualRecords.length);
       if (refActual.length > 0) {
-        line(refActual, true, "#9ec5fe");
+        // Použijeme totalDays pre správne zarovnanie X pozícií
+        line(refActual, true, "#9ec5fe", totalDays);
       }
     }
     // Aktuálny rok 2025 - len skutočné dáta (do posledného dostupného dátumu z AGSI), nie budúce
