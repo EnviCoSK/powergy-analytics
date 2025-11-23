@@ -1667,10 +1667,13 @@ def api_ingest_agsi_today(date: str | None = Query(None, description="YYYY-MM-DD
                     pass  # Pokračujeme s jednotlivými dňami
             
             # AGSI API má oneskorenie - dáta pre dnešok ešte nemusia byť dostupné
-            # Skúsime najnovšie dáta od včerajška dozadu
+            # Skúsime najnovšie dáta od včerajška dozadu (NIKDY nie dnes!)
+            # Maximálny dátum je včerajšok
+            max_available_date = today - dt.timedelta(days=1)
             for i in range(1, 6):  # Včera až 5 dní dozadu (nie dnes!)
                 candidate = today - dt.timedelta(days=i)
-                if candidate >= last_date:
+                # Pridáme len dátumy, ktoré sú >= last_date a <= max_available_date (včerajšok)
+                if candidate >= last_date and candidate <= max_available_date:
                     candidates.append(str(candidate))
 
         picked_date = None
