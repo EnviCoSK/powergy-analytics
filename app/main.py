@@ -896,7 +896,34 @@ INDEX_HTML = Template("""<!doctype html>
       const boxW = Math.ceil(maxWidth) + pad*2;
       const lineH = 16;
       const boxH = lineH * tooltipLines.length + 6;
-      const lx = Math.min(Math.max(x - boxW/2, left), W - right - boxW);
+      
+      // Odsadenie tooltipu od zvislej čiary
+      const tooltipOffset = 15;
+      const graphCenter = left + (W - left - right) / 2;
+      
+      // Rozhodneme, či zobraziť tooltip vpravo alebo vľavo od zvislej čiary
+      let lx;
+      if (x < graphCenter) {
+        // V ľavej polovici grafu - zobrazíme tooltip vpravo od zvislej čiary
+        lx = x + tooltipOffset;
+        // Skontrolujeme, či sa tooltip zmestí vpravo
+        if (lx + boxW > W - right) {
+          // Ak nie, zobrazíme ho vľavo
+          lx = x - boxW - tooltipOffset;
+        }
+      } else {
+        // V pravej polovici grafu - zobrazíme tooltip vľavo od zvislej čiary
+        lx = x - boxW - tooltipOffset;
+        // Skontrolujeme, či sa tooltip zmestí vľavo
+        if (lx < left) {
+          // Ak nie, zobrazíme ho vpravo
+          lx = x + tooltipOffset;
+        }
+      }
+      
+      // Zabezpečíme, že tooltip je v hraniciach grafu
+      lx = Math.max(left, Math.min(lx, W - right - boxW));
+      
       const ly = Math.max((isForecast ? Y(vCur) : Y(vCur)) - boxH - 10, top);
       
       // Zistíme maximálnu výšku pre tooltip (aby sa zmestil na obrazovku)
