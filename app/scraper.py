@@ -214,14 +214,20 @@ def run_daily_agsi():
         
         # AGSI API má oneskorenie - dáta pre dnešok ešte nemusia byť dostupné
         # Skúsime najnovšie dáta od včerajška dozadu
-        yesterday = today - dt.timedelta(days=1)
+        # Aktualizujeme last_date po backfille (ak sa vykonal)
+        if days_missing > 2:
+            # Po backfille sme už aktualizovali last_date v riadku 208
+            pass
+        
         candidates = []
-        for i in range(1, 6):  # Skúsime včera až 5 dní dozadu (nie dnes!)
+        # Skúsime najnovšie dáta od včerajška dozadu (nie dnes, lebo AGSI má oneskorenie)
+        for i in range(1, 6):  # Včera až 5 dní dozadu
             candidate = today - dt.timedelta(days=i)
-            if candidate >= start_date:
+            # Pridáme len dátumy, ktoré sú >= last_date (aby sme nepreskakovali)
+            if candidate >= last_date:
                 candidates.append(str(candidate))
         
-        # Ak nemáme žiadne kandidáty, použijeme aspoň posledných 5 dní (od včerajška)
+        # Ak nemáme žiadne kandidáty (napr. ak last_date je v budúcnosti), použijeme aspoň posledných 5 dní
         if not candidates:
             for i in range(1, 6):
                 candidates.append(str(today - dt.timedelta(days=i)))
