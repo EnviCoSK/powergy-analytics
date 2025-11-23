@@ -687,21 +687,27 @@ INDEX_HTML = Template("""<!doctype html>
       if (hoverIdx < nx) {
         // Skutočné dáta
         vCur = cur[hoverIdx];
-        const hasPrev = Array.isArray(ref) && ref.length === nx;
-        vPrev = hasPrev ? ref[hoverIdx] : null;
+        // Použijeme rovnakú logiku ako pri kreslení čiar - len dáta do actualRecords.length
+        const refActual = ref.length > 0 ? ref.slice(0, actualRecords.length) : [];
+        vPrev = refActual.length > hoverIdx ? refActual[hoverIdx] : null;
         date = actualRecords[hoverIdx].date;
         isForecast = false;
         
         // Zbierame hodnoty pre všetky roky v tomto bode
+        // Musíme použiť rovnaké dáta ako pri kreslení čiar (len do actualRecords.length)
         hoverYearValues[new Date().getFullYear()] = vCur;
         if (vPrev !== null) {
           hoverYearValues[new Date().getFullYear() - 1] = vPrev;
         }
-        // Zbierame hodnoty pre ostatné roky
+        // Zbierame hodnoty pre ostatné roky - používame rovnakú logiku ako pri kreslení čiar
         Object.keys(yearsPercent).forEach(key => {
-          if (yearsPercent[key] && yearsPercent[key].length > hoverIdx) {
-            const yearNum = parseInt(key.replace('year_', ''));
-            hoverYearValues[yearNum] = yearsPercent[key][hoverIdx];
+          if (yearsPercent[key] && yearsPercent[key].length > 0) {
+            // Použijeme len dáta do actualRecords.length, rovnako ako pri kreslení čiar
+            const yearData = yearsPercent[key].slice(0, actualRecords.length);
+            if (yearData.length > hoverIdx) {
+              const yearNum = parseInt(key.replace('year_', ''));
+              hoverYearValues[yearNum] = yearData[hoverIdx];
+            }
           }
         });
       } else {
