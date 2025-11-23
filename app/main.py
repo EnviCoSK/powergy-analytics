@@ -191,6 +191,7 @@ tr:hover { background:#f9fafb; }
       <button id="btnCsv">Export CSV</button>
       <button id="btnXlsx">Export Excel</button>
       <button id="btnChartPng">Export grafu PNG</button>
+      <button id="btnLng" onclick="window.location.href='/lng'">LNG</button>
     </div>
   </div>
 
@@ -1383,6 +1384,34 @@ def api_db_stats():
 @app.get("/", response_class=HTMLResponse)
 def index():
     return INDEX_HTML.render()
+
+LNG_HTML = Template("""<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LNG – Powergy Správy</title>
+<style>
+ body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; color:#0b1221; }
+ .row { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+ button { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+ button:hover { background:#f9fafb; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <h1>LNG</h1>
+    <div>
+      <button onclick="window.location.href='/'">Späť na hlavnú stránku</button>
+    </div>
+  </div>
+</body>
+</html>
+""")
+
+@app.get("/lng", response_class=HTMLResponse)
+def lng_page():
+    return LNG_HTML.render()
 
 
 # ---------------------------- Core API ----------------------------
