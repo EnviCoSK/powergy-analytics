@@ -1051,6 +1051,34 @@ def api_health():
         return JSONUTF8Response({"ok": False, "detail": str(e)}, status_code=500)
 
 
+@app.get("/api/env-check", response_class=JSONUTF8Response)
+def api_env_check():
+    """
+    Diagnostický endpoint na kontrolu environment variables.
+    NEPOUŽÍVAJTE v produkcii bez autentifikácie!
+    """
+    env_vars = {
+        "DATABASE_URL": "set" if os.getenv("DATABASE_URL") else "missing",
+        "OPENAI_API_KEY": "set" if os.getenv("OPENAI_API_KEY") else "missing",
+        "AGSI_API_KEY": "set" if os.getenv("AGSI_API_KEY") else "missing",
+        "KYOS_URL": os.getenv("KYOS_URL", "not set"),
+    }
+    
+    # Skontrolujeme aj, či AGSI_API_KEY má správnu dĺžku (bezpečne, bez zverejnenia hodnoty)
+    agsi_key = os.getenv("AGSI_API_KEY", "")
+    env_vars["AGSI_API_KEY_length"] = len(agsi_key) if agsi_key else 0
+    
+    return {
+        "ok": True,
+        "env_vars": env_vars,
+        "all_set": all([
+            os.getenv("DATABASE_URL"),
+            os.getenv("OPENAI_API_KEY"),
+            os.getenv("AGSI_API_KEY")
+        ])
+    }
+
+
 @app.get("/api/db-tables", response_class=JSONUTF8Response)
 def api_db_tables():
     sess = SessionLocal()
