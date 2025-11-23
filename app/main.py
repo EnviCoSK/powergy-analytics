@@ -653,22 +653,79 @@ INDEX_HTML = Template("""<!doctype html>
     g.lineTo(W-right, H-bottom); 
     g.stroke();
 
-    // Zobrazíme všetky roky (len skutočné dáta, nie budúce)
+    // Zobrazíme všetky roky - skutočné dáta + predpoveď (dáta z predchádzajúcich rokov pre rovnaký deň a mesiac)
     yearColors.forEach(({key, color}) => {
       if (yearsPercent[key] && yearsPercent[key].length > 0) {
-        // Obmedzíme zobrazenie len na skutočné dáta (do dnes)
-        // yearsPercent obsahuje dáta zoradené podľa dátumov, takže použijeme len prvých actualRecords.length
+        // Začneme so skutočnými dátami
         const yearData = yearsPercent[key].slice(0, actualRecords.length);
+        
+        // Ak máme predpoveď, pridáme dáta z predchádzajúcich rokov pre dátumy v oblasti predpovede
+        if (forecastDates && forecastDates.length > 0 && yearsData && yearsData[key]) {
+          forecastDates.forEach(forecastDate => {
+            const forecastDateParts = forecastDate.split('.');
+            if (forecastDateParts.length === 3) {
+              const forecastDay = parseInt(forecastDateParts[0]);
+              const forecastMonth = parseInt(forecastDateParts[1]);
+              
+              // Nájdeme záznam s rovnakým dňom a mesiacom v yearsData
+              const matchingRecord = yearsData[key].find(r => {
+                if (!r || !r.date) return false;
+                const recordParts = r.date.split('.');
+                if (recordParts.length !== 3) return false;
+                const recordDay = parseInt(recordParts[0]);
+                const recordMonth = parseInt(recordParts[1]);
+                return recordDay === forecastDay && recordMonth === forecastMonth;
+              });
+              
+              if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
+                yearData.push(matchingRecord.percent);
+              } else {
+                // Ak nie je záznam, použijeme poslednú hodnotu
+                yearData.push(yearData[yearData.length - 1]);
+              }
+            }
+          });
+        }
+        
         if (yearData.length > 0) {
-          line(yearData, true, color);
+          line(yearData, true, color, totalDays);
         }
       }
     });
-    // Predchádzajúci rok - len skutočné dáta
+    // Predchádzajúci rok - skutočné dáta + predpoveď
     if(ref.length) {
       const refActual = ref.slice(0, actualRecords.length);
+      
+      // Ak máme predpoveď, pridáme dáta z predchádzajúceho roka pre dátumy v oblasti predpovede
+      if (forecastDates && forecastDates.length > 0 && prev && Array.isArray(prev)) {
+        forecastDates.forEach(forecastDate => {
+          const forecastDateParts = forecastDate.split('.');
+          if (forecastDateParts.length === 3) {
+            const forecastDay = parseInt(forecastDateParts[0]);
+            const forecastMonth = parseInt(forecastDateParts[1]);
+            
+            // Nájdeme záznam s rovnakým dňom a mesiacom v prev
+            const matchingRecord = prev.find(r => {
+              if (!r || !r.date) return false;
+              const recordParts = r.date.split('.');
+              if (recordParts.length !== 3) return false;
+              const recordDay = parseInt(recordParts[0]);
+              const recordMonth = parseInt(recordParts[1]);
+              return recordDay === forecastDay && recordMonth === forecastMonth;
+            });
+            
+            if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
+              refActual.push(matchingRecord.percent);
+            } else {
+              // Ak nie je záznam, použijeme poslednú hodnotu
+              refActual.push(refActual[refActual.length - 1]);
+            }
+          }
+        });
+      }
+      
       if (refActual.length > 0) {
-        line(refActual, true, "#9ec5fe");
+        line(refActual, true, "#9ec5fe", totalDays);
       }
     }
     // Aktuálny rok 2025 - len skutočné dáta (do posledného dostupného dátumu z AGSI), nie budúce
