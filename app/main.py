@@ -680,8 +680,8 @@ INDEX_HTML = Template("""<!doctype html>
     }
 
     if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<totalDays){
-      // Pre skutočné dáta používame nx (rovnako ako čiary), pre predpoveď totalDays
-      const x = hoverIdx < nx ? X(hoverIdx, nx) : X(hoverIdx, totalDays);
+      // Použijeme totalDays pre všetky výpočty X pozície, aby sa tooltip zarovnal s čiarami
+      const x = X(hoverIdx, totalDays);
       // Pre predpoveď použijeme iné hodnoty
       let vCur, vPrev, date, isForecast;
       let hoverYearValues = {}; // Hodnoty pre všetky roky v tomto bode
