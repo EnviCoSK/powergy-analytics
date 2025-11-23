@@ -654,14 +654,12 @@ INDEX_HTML = Template("""<!doctype html>
     g.stroke();
 
     // Zobrazíme všetky roky (len skutočné dáta, nie budúce)
-    // Použijeme totalDays pre správne zarovnanie s aktuálnym rokom a predpoveďou
     yearColors.forEach(({key, color}) => {
       if (yearsPercent[key] && yearsPercent[key].length > 0) {
         // Obmedzíme zobrazenie len na skutočné dáta (do dnes)
         const yearData = yearsPercent[key].slice(0, actualRecords.length);
         if (yearData.length > 0) {
-          // Použijeme totalDays pre správne zarovnanie X pozícií
-          line(yearData, true, color, totalDays);
+          line(yearData, true, color);
         }
       }
     });
@@ -669,8 +667,7 @@ INDEX_HTML = Template("""<!doctype html>
     if(ref.length) {
       const refActual = ref.slice(0, actualRecords.length);
       if (refActual.length > 0) {
-        // Použijeme totalDays pre správne zarovnanie X pozícií
-        line(refActual, true, "#9ec5fe", totalDays);
+        line(refActual, true, "#9ec5fe");
       }
     }
     // Aktuálny rok 2025 - len skutočné dáta (do posledného dostupného dátumu z AGSI), nie budúce
@@ -682,7 +679,8 @@ INDEX_HTML = Template("""<!doctype html>
     }
 
     if(hoverIdx!=null && hoverIdx>=0 && hoverIdx<totalDays){
-      const x = X(hoverIdx,totalDays);
+      // Pre skutočné dáta používame nx (rovnako ako čiary), pre predpoveď totalDays
+      const x = hoverIdx < nx ? X(hoverIdx, nx) : X(hoverIdx, totalDays);
       // Pre predpoveď použijeme iné hodnoty
       let vCur, vPrev, date, isForecast;
       let hoverYearValues = {}; // Hodnoty pre všetky roky v tomto bode
