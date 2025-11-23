@@ -83,7 +83,7 @@ def run_daily():
 
     sess.commit()
     sess.close()
-
+    
 import os
 import requests
 
@@ -117,7 +117,7 @@ def _agsi_fetch_all(from_date: str) -> list[dict]:
     # AGSI API má oneskorenie - dáta pre dnešok ešte nemusia byť dostupné
     # Použijeme včerajšok ako maximálny dátum
     max_date = dt.date.today() - dt.timedelta(days=1)
-    
+
     base = {
         "type": "eu",                    # 🔑 kľúčové
         "from": from_date,
@@ -358,8 +358,8 @@ def backfill_agsi(from_date: str = "2021-01-01"):
                 continue
             
             try:
-                d_obj = dt.date.fromisoformat(d)
-                p_val = float(p)
+            d_obj = dt.date.fromisoformat(d)
+            p_val = float(p)
             except (ValueError, TypeError):
                 continue
 
@@ -368,7 +368,7 @@ def backfill_agsi(from_date: str = "2021-01-01"):
             if rec:
                 # Aktualizujeme vždy, aj ak sa hodnota nezmenila (pre istotu)
                 old_percent = rec.percent
-                rec.percent = p_val
+                    rec.percent = p_val
                 # Počítame ako update len ak sa hodnota skutočne zmenila
                 if abs(old_percent - p_val) > 0.001:  # Použijeme malú toleranciu pre float porovnanie
                     updated += 1
@@ -439,4 +439,4 @@ if __name__ == "__main__":
     if AGSI_API_KEY:
         run_daily_agsi()
     else:
-        run_daily()
+    run_daily()

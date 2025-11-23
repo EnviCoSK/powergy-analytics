@@ -713,6 +713,51 @@ INDEX_HTML = Template("""<!doctype html>
           date = forecastDates[forecastIdx];
           isForecast = true;
           hoverYearValues['predpoveď'] = vCur;
+          
+          // Pre predpoveď nájdeme dáta z predchádzajúcich rokov pre ten istý deň a mesiac
+          // Parsujeme dátum predpovede (napr. "26.11.2025")
+          const forecastDateParts = date.split('.');
+          if (forecastDateParts.length === 3) {
+            const forecastDay = parseInt(forecastDateParts[0]);
+            const forecastMonth = parseInt(forecastDateParts[1]);
+            const currentYear = new Date().getFullYear();
+            
+            // Hľadáme dáta z predchádzajúcich rokov pre ten istý deň a mesiac
+            Object.keys(yearsData || {}).forEach(key => {
+              const yearNum = parseInt(key.replace('year_', ''));
+              if (!isNaN(yearNum) && yearsData[key] && Array.isArray(yearsData[key])) {
+                // Hľadáme záznam s rovnakým dňom a mesiacom
+                const matchingRecord = yearsData[key].find(r => {
+                  if (!r || !r.date) return false;
+                  const recordParts = r.date.split('.');
+                  if (recordParts.length !== 3) return false;
+                  const recordDay = parseInt(recordParts[0]);
+                  const recordMonth = parseInt(recordParts[1]);
+                  return recordDay === forecastDay && recordMonth === forecastMonth;
+                });
+                
+                if (matchingRecord && matchingRecord.percent !== null && matchingRecord.percent !== undefined) {
+                  hoverYearValues[yearNum] = matchingRecord.percent;
+                }
+              }
+            });
+            
+            // Hľadáme aj dáta z predchádzajúceho roka (2024) v `prev`
+            if (prev && Array.isArray(prev) && prev.length > 0) {
+              const prevYearRecord = prev.find(r => {
+                if (!r || !r.date) return false;
+                const recordParts = r.date.split('.');
+                if (recordParts.length !== 3) return false;
+                const recordDay = parseInt(recordParts[0]);
+                const recordMonth = parseInt(recordParts[1]);
+                return recordDay === forecastDay && recordMonth === forecastMonth;
+              });
+              
+              if (prevYearRecord && prevYearRecord.percent !== null && prevYearRecord.percent !== undefined) {
+                hoverYearValues[currentYear - 1] = prevYearRecord.percent;
+              }
+            }
+          }
         } else {
           return; // Neplatný index predpovede
         }
@@ -731,6 +776,27 @@ INDEX_HTML = Template("""<!doctype html>
         const yForecast = Y(vCur);
         g.fillStyle = "#8b5cf6";
         g.beginPath(); g.arc(x, yForecast, 4, 0, Math.PI*2); g.fill();
+        
+        // Zobrazíme aj body z predchádzajúcich rokov (ak existujú)
+        Object.keys(hoverYearValues).forEach(yearKey => {
+          const yearNum = parseInt(yearKey);
+          if (!isNaN(yearNum)) {
+            const yearValue = hoverYearValues[yearKey];
+            // Nájdeme farbu pre tento rok
+            let yearColor = "#6b7280";
+            if (yearNum === currentYear - 1) {
+              yearColor = "#9ec5fe"; // Predchádzajúci rok (2024)
+            } else {
+              const yearColorObj = yearColors.find(y => y.name === String(yearNum));
+              if (yearColorObj) {
+                yearColor = yearColorObj.color;
+              }
+            }
+            const yYear = Y(yearValue);
+            g.fillStyle = yearColor;
+            g.beginPath(); g.arc(x, yYear, 3, 0, Math.PI*2); g.fill();
+          }
+        });
       } else {
         // Skutočné dáta - modrá
         const yCur = Y(vCur);
@@ -762,8 +828,31 @@ INDEX_HTML = Template("""<!doctype html>
       tooltipLines.push(date);
       
       if (isForecast) {
-        // Pre predpoveď zobrazíme dátum a hodnotu
+        // Pre predpoveď zobrazíme predpoveď a všetky dostupné roky
         tooltipLines.push(`Predpoveď: ${vCur.toFixed(2)} %`);
+        
+        // Zoradíme roky od najnovšieho po najstarší (bez predpovede)
+        const sortedYears = Object.keys(hoverYearValues)
+          .filter(key => key !== 'predpoveď')
+          .sort((a, b) => {
+            const yearA = parseInt(a);
+            const yearB = parseInt(b);
+            if (!isNaN(yearA) && !isNaN(yearB)) {
+              return yearB - yearA;
+            }
+            if (!isNaN(yearA)) return -1;
+            if (!isNaN(yearB)) return 1;
+            return 0;
+          });
+        
+        // Zobrazíme všetky roky
+        sortedYears.forEach(yearKey => {
+          const yearValue = hoverYearValues[yearKey];
+          const yearNum = parseInt(yearKey);
+          if (!isNaN(yearNum)) {
+            tooltipLines.push(`${yearNum}: ${yearValue.toFixed(2)} %`);
+          }
+        });
       } else {
         // Zoradíme roky od najnovšieho po najstarší
         const sortedYears = Object.keys(hoverYearValues).sort((a, b) => {
