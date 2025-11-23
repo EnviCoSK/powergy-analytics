@@ -135,13 +135,13 @@ INDEX_HTML = Template("""<!doctype html>
  .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin-bottom:24px; }
  .card { border:1px solid #e5e7eb; border-radius:16px; padding:16px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
  h1 { font-size: 22px; margin: 0 0 8px; }
-h3 { margin: 24px 0 8px 0; }
+h3 { margin: 12px 0 8px 0; }
 .muted { color:#6b7280; }
 canvas { width: 100%; max-width: 980px; height: 320px; }
 button, select { padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
 button:hover { background:#f9fafb; }
 .toolbar { display:flex; gap:8px; align-items:center; }
-.section { margin-bottom:16px; }
+.section { margin-bottom:8px; }
  .positive { color:#10b981; }
  .negative { color:#ef4444; }
  .neutral { color:#6b7280; }
