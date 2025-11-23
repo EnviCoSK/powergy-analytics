@@ -180,10 +180,24 @@ def run_daily_agsi():
     Dotiahne a uloží posledný dostupný deň z AGSI (EU 'full' %), spraví upsert a spočíta deltu.
     Používa AGSI API namiesto KYOS scrapingu.
     """
-    if not AGSI_API_KEY:
-        raise RuntimeError("Missing AGSI_API_KEY")
+    import sys
+    print("=" * 60, file=sys.stderr)
+    print(f"Starting run_daily_agsi at {dt.datetime.now()}", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
     
-    init_db()
+    if not AGSI_API_KEY:
+        error_msg = "Missing AGSI_API_KEY"
+        print(f"ERROR: {error_msg}", file=sys.stderr)
+        raise RuntimeError(error_msg)
+    
+    print(f"AGSI_API_KEY is set: {bool(AGSI_API_KEY)}", file=sys.stderr)
+    
+    try:
+        init_db()
+        print("Database initialized", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Database initialization error: {e}", file=sys.stderr)
+    
     sess = SessionLocal()
     try:
         # Najprv zistíme posledný dátum v DB
@@ -287,9 +301,17 @@ def run_daily_agsi():
             sess.add(GasStorageDaily(date=d, percent=picked_full, delta=delta, comment=comment))
         
         sess.commit()
-        return {"ok": True, "date": picked_date, "percent": picked_full, "delta": delta}
+        result = {"ok": True, "date": picked_date, "percent": picked_full, "delta": delta}
+        print(f"SUCCESS: {result}", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        return result
     except Exception as e:
         sess.rollback()
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"ERROR in run_daily_agsi: {e}", file=sys.stderr)
+        print(error_trace, file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
         raise
     finally:
         sess.close()
