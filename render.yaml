@@ -19,7 +19,7 @@ services:
     name: powergy-scraper-daily
     env: docker
     schedule: "0 8 * * *"
-    dockerCommand: python -c "import sys; sys.path.insert(0, '/app'); from app.scraper import run_daily_agsi; run_daily_agsi()"
+    dockerCommand: python /app/run_daily.py
     envVars:
       - key: DATABASE_URL
         sync: false
