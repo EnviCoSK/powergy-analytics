@@ -1290,9 +1290,15 @@ def api_history(days: int = 30):
             "trend": "rast" if (actual_records[-1]["percent"] > actual_records[0]["percent"]) else "pokles" if len(actual_records) > 1 else (("rast" if (records[-1]["percent"] > records[0]["percent"]) else "pokles") if len(records) > 1 else "stabilný")
         }
 
+        # Zistíme posledný dátum v aktuálnom roku a koniec mesiaca
+        last_date = rows[-1].date
+        # Koniec mesiaca - deň 0 nasledujúceho mesiaca
+        end_of_month = dt.date(last_date.year, last_date.month + 1, 1) - TD(days=1) if last_date.month < 12 else dt.date(last_date.year + 1, 1, 1) - TD(days=1)
+        
         # Optimalizácia: jeden dotaz pre predchádzajúci rok
         start_prev = rows[0].date - TD(days=365)
-        end_prev   = rows[-1].date - TD(days=365)
+        # Rozšírime až do konca mesiaca v predchádzajúcom roku
+        end_prev = end_of_month - TD(days=365)
 
         prev_rows = (
             sess.query(GasStorageDaily.date, GasStorageDaily.percent)
@@ -1304,6 +1310,7 @@ def api_history(days: int = 30):
 
         baseline = records[0]["percent"]
         prev_year = []
+        # Najprv dátumy z aktuálnych dát
         for r in rows:
             key = r.date - TD(days=365)
             pr = by_date.get(key)
@@ -1311,6 +1318,17 @@ def api_history(days: int = 30):
                 prev_year.append({"date": _format_date(pr.date), "percent": round(float(_to_float(pr.percent)), 2)})
             else:
                 prev_year.append({"date": _format_date(key), "percent": baseline})
+        
+        # Pridáme dátumy až do konca mesiaca (ak existujú dáta)
+        if rows:
+            last_prev_date = rows[-1].date - TD(days=365)
+            current_date = last_prev_date + TD(days=1)
+            while current_date <= end_prev:
+                pr = by_date.get(current_date)
+                if pr:
+                    prev_year.append({"date": _format_date(current_date), "percent": round(float(_to_float(pr.percent)), 2)})
+                # Ak nie sú dáta, nepridávame (necháme to prázdne)
+                current_date += TD(days=1)
 
         # Sezónne porovnanie - pridať dáta pre predchádzajúce roky (2023, 2022, atď.)
         # Optimalizácia: namiesto N*M dotazov (N=dni, M=roky), urobíme M dotazov
@@ -1322,8 +1340,21 @@ def api_history(days: int = 30):
             # Vypočítame všetky dátumy, ktoré potrebujeme pre každý rok
             for year_offset in range(2, 5):  # 2023, 2022, 2021
                 year_key = f"year_{current_year - year_offset}"
-                # Vytvoríme zoznam dátumov pre tento rok
+                # Vytvoríme zoznam dátumov pre tento rok (z aktuálnych dát)
                 target_dates = [r.date - TD(days=365 * year_offset) for r in rows]
+                
+                # Pridáme dátumy až do konca mesiaca v predchádzajúcom roku
+                # Vypočítame koniec mesiaca v predchádzajúcom roku
+                prev_year_end_of_month = end_of_month - TD(days=365 * year_offset)
+                # Pridáme dátumy od posledného dátumu v target_dates až do konca mesiaca
+                if target_dates:
+                    last_target_date = max(target_dates)
+                    # Pridáme dátumy od ďalšieho dňa po last_target_date až do prev_year_end_of_month
+                    current_date = last_target_date + TD(days=1)
+                    while current_date <= prev_year_end_of_month:
+                        target_dates.append(current_date)
+                        current_date += TD(days=1)
+                
                 if not target_dates:
                     continue
                 
@@ -1339,7 +1370,7 @@ def api_history(days: int = 30):
                 # Vytvoríme mapu dátum -> percent
                 by_date_year = {p.date: p for p in prev_rows_year_all}
                 
-                # Zostavíme výsledok
+                # Zostavíme výsledok - najprv dátumy z aktuálnych dát
                 year_rows = []
                 for r in rows:
                     key = r.date - TD(days=365 * year_offset)
@@ -1348,6 +1379,17 @@ def api_history(days: int = 30):
                         year_rows.append({"date": _format_date(key), "percent": round(float(_to_float(pr.percent)), 2)})
                     else:
                         year_rows.append({"date": _format_date(key), "percent": baseline})
+                
+                # Pridáme dátumy až do konca mesiaca (ak existujú dáta)
+                if target_dates:
+                    last_target_date = max([r.date - TD(days=365 * year_offset) for r in rows])
+                    current_date = last_target_date + TD(days=1)
+                    while current_date <= prev_year_end_of_month:
+                        pr = by_date_year.get(current_date)
+                        if pr:
+                            year_rows.append({"date": _format_date(current_date), "percent": round(float(_to_float(pr.percent)), 2)})
+                        # Ak nie sú dáta, nepridávame (necháme to prázdne)
+                        current_date += TD(days=1)
                 
                 if year_rows:
                     years_data[year_key] = year_rows
