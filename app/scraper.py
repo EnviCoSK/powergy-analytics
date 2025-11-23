@@ -290,8 +290,20 @@ def run_daily_agsi():
         except Exception:
             pass
         
-        # Generuj komentár
-        comment = generate_comment(picked_full, delta, trend7, yoy_gap)
+        # Generuj komentár (ak je OPENAI_API_KEY dostupný, inak použije fallback)
+        try:
+            from .gpt import generate_comment
+            comment = generate_comment(picked_full, delta, trend7, yoy_gap)
+        except Exception as e:
+            print(f"Warning: Could not generate comment with GPT: {e}, using fallback", file=sys.stderr)
+            # Fallback komentár
+            d = "—" if delta is None else f"{delta:+.2f} p.b."
+            y = "—" if yoy_gap is None else f"{yoy_gap:+.2f} p.b. vs. 2024"
+            comment = (
+                f"Zásobníky sú na {picked_full:.2f} %, denná zmena {d}. "
+                f"Medziročný rozdiel je {y}. "
+                f"Vývoj zodpovedá sezóne; riziká: počasie, prítoky LNG a prípadné neplánované odstávky."
+            )
         
         if row:
             row.percent = picked_full

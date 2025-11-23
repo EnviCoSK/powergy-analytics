@@ -23,9 +23,10 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
       - key: AGSI_API_KEY
         sync: false
       - key: KYOS_URL
         value: https://gas.kyos.com/
+      - key: OPENAI_API_KEY
+        sync: false
+        optional: true
